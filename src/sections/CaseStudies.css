@@ -1,0 +1,78 @@
+.case-studies {
+    padding: 100px 0;
+}
+
+.cases-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 3rem;
+    margin-top: 4rem;
+}
+
+.case-card {
+    padding: 3rem;
+    border-radius: 2.5rem;
+    display: grid;
+    grid-template-columns: 1fr 1.5fr 1fr;
+    gap: 3rem;
+    align-items: center;
+}
+
+.case-header h3 {
+    font-size: 2rem;
+    margin-bottom: 1rem;
+    color: var(--accent-color);
+}
+
+.challenge {
+    color: var(--text-muted);
+    font-size: 1.1rem;
+    line-height: 1.5;
+}
+
+.solution {
+    font-size: 1.1rem;
+    margin-bottom: 2rem;
+}
+
+.impact-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+}
+
+.stat-pill {
+    padding: 0.5rem 1rem;
+    background: var(--glass-bg);
+    border: 1px solid var(--accent-color);
+    border-radius: 999px;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: white;
+}
+
+.case-footer {
+    border-left: 2px solid var(--accent-color);
+    padding-left: 1.5rem;
+}
+
+.quote {
+    font-style: italic;
+    color: var(--text-muted);
+    font-size: 1rem;
+}
+
+@media (max-width: 1024px) {
+    .case-card {
+        grid-template-columns: 1fr;
+        gap: 2rem;
+        padding: 2rem;
+    }
+
+    .case-footer {
+        border-left: none;
+        border-top: 1px solid var(--glass-border);
+        padding-left: 0;
+        padding-top: 1.5rem;
+    }
+}
