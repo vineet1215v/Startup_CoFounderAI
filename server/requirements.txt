@@ -1,9 +1,0 @@
-fastapi
-uvicorn
-python-dotenv
-chromadb
-pydantic
-websockets
-asyncio
-redis
-requests

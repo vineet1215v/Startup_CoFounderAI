@@ -1,0 +1,130 @@
+/* Button Component Styles */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1.5rem;
+    background: transparent;
+    border: 1px solid var(--accent-color);
+    border-radius: 0.75rem;
+    color: var(--accent-color);
+    font-family: var(--font-family);
+    font-weight: 600;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    white-space: nowrap;
+    text-decoration: none;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn:hover:not(:disabled) {
+    background: var(--accent-color);
+    color: white;
+    box-shadow: 0 0 20px var(--accent-glow);
+}
+
+.btn:active:not(:disabled) {
+    transform: scale(0.95);
+}
+
+/* Button Sizes */
+.btn-sm {
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+}
+
+.btn-md {
+    padding: 0.75rem 1.5rem;
+    font-size: 1rem;
+}
+
+.btn-lg {
+    padding: 1rem 2rem;
+    font-size: 1.125rem;
+    font-weight: 700;
+}
+
+/* Button Variants */
+.btn-primary {
+    background: linear-gradient(135deg, var(--accent-color) 0%, #8b5cf6 100%);
+    color: white;
+    border: none;
+    box-shadow: 0 0 20px var(--accent-glow);
+}
+
+.btn-primary:hover:not(:disabled) {
+    background: linear-gradient(135deg, #a78bfa 0%, #7c3aed 100%);
+    box-shadow: 0 0 30px var(--accent-glow);
+    transform: translateY(-2px);
+}
+
+.btn-secondary {
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: white;
+}
+
+.btn-secondary:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.4);
+}
+
+.btn-purple {
+    background: linear-gradient(135deg, var(--accent-color) 0%, #8b5cf6 100%);
+    color: white;
+    border: none;
+    box-shadow: 0 0 20px var(--accent-glow);
+}
+
+.btn-purple:hover:not(:disabled) {
+    box-shadow: 0 0 30px var(--accent-glow);
+    transform: translateY(-2px);
+}
+
+/* Glass Button Style */
+.btn.glass {
+    background: var(--glass-bg);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--glass-border);
+    color: white;
+}
+
+.btn.glass:hover:not(:disabled) {
+    background: rgba(139, 92, 246, 0.15);
+    border-color: var(--accent-color);
+}
+
+/* Full Width */
+.btn-full {
+    width: 100%;
+}
+
+/* Arrow Icon */
+.arrow {
+    display: inline-block;
+    transition: transform 0.3s ease;
+}
+
+.btn:hover:not(:disabled) .arrow {
+    transform: translate(2px, -2px);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .btn {
+        padding: 0.75rem 1.25rem;
+        font-size: 0.95rem;
+    }
+
+    .btn-lg {
+        padding: 0.875rem 1.75rem;
+        font-size: 1rem;
+    }
+}
