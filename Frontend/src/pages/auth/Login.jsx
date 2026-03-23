@@ -3,7 +3,7 @@ import { motion } from 'framer-motion'
 import { GoogleLogin } from '@react-oauth/google'
 import { useAuth } from '../../context/AuthContext'
 import Button from '../../components/Button'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 
 const Login = () => {
     const { login } = useAuth()
@@ -27,12 +27,8 @@ const Login = () => {
         setLoading(false)
     }
 
-    const handleSuccess = (credentialResponse) => {
-        console.log('Login Success:', credentialResponse)
-        // For now, mock a successful login until Google OAuth backend is ready
-        localStorage.setItem('user', JSON.stringify({ name: 'Google User', email: 'user@gmail.com' }))
-        navigate('/dashboard')
-        window.location.reload() // Refresh to update context
+    const handleSuccess = () => {
+        setError('Google login is not connected to the backend yet. Use email and password for now.')
     }
 
     return (
@@ -86,7 +82,7 @@ const Login = () => {
                 </div>
 
                 <p className="auth-footer">
-                    Don't have an account? <a href="/register">Register</a>
+                    Don't have an account? <Link to="/register">Register</Link>
                 </p>
             </motion.div>
         </div>

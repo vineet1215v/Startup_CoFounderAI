@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react'
+import { apiFetch } from '../config/api'
 
 const AuthContext = createContext()
 
@@ -7,19 +8,46 @@ export const AuthProvider = ({ children }) => {
     const [loading, setLoading] = useState(true)
 
     useEffect(() => {
-        // Check for existing session (e.g., in localStorage)
-        const storedUser = localStorage.getItem('user')
-        if (storedUser) {
-            setUser(JSON.parse(storedUser))
+        const restoreSession = async () => {
+            const token = localStorage.getItem('token')
+            const storedUser = localStorage.getItem('user')
+
+            if (!token) {
+                setLoading(false)
+                return
+            }
+
+            if (storedUser) {
+                setUser(JSON.parse(storedUser))
+            }
+
+            try {
+                const response = await apiFetch('/api/auth/me')
+                const data = await response.json()
+
+                if (!response.ok) {
+                    throw new Error(data.message || 'Session expired')
+                }
+
+                setUser(data.user)
+                localStorage.setItem('user', JSON.stringify(data.user))
+            } catch (error) {
+                console.error(error)
+                localStorage.removeItem('user')
+                localStorage.removeItem('token')
+                setUser(null)
+            } finally {
+                setLoading(false)
+            }
         }
-        setLoading(false)
+
+        restoreSession()
     }, [])
 
     const login = async (email, password) => {
         try {
-            const response = await fetch('http://localhost:5000/api/auth/login', {
+            const response = await apiFetch('/api/auth/login', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ email, password })
             })
             const data = await response.json()
@@ -39,9 +67,8 @@ export const AuthProvider = ({ children }) => {
 
     const signup = async (name, email, password) => {
         try {
-            const response = await fetch('http://localhost:5000/api/auth/register', {
+            const response = await apiFetch('/api/auth/register', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name, email, password })
             })
             const data = await response.json()

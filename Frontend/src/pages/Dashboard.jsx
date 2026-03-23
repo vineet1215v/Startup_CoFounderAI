@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
+import { useAuth } from '../context/AuthContext'
+import { apiFetch, boardroomFetch, boardroomWsUrl, hasBoardroomService } from '../config/api'
 import '../styles/Dashboard.css'
 
 const MSGS = [
@@ -14,8 +16,21 @@ const MSGS = [
   { agent: 'fin', av: 'FN', bg: 'linear-gradient(135deg,#7c3aed,#a78bfa)', name: 'Felix', role: 'Finance', delay: 11600, tone: 'agree', text: "Updated numbers with phased build + 18-month runway target: raise $650k pre-seed, 3-person founding team, 500 paying users by month 9. Unit economics clear at that point. It's tight but achievable if we execute on positioning." },
 ]
 
+const INITIAL_AGENT_STATE = {
+  tech: { state: 'Waiting for idea', ind: 'status-idle' },
+  mkt: { state: 'Waiting for idea', ind: 'status-idle' },
+  fin: { state: 'Waiting for idea', ind: 'status-idle' },
+  prod: { state: 'Waiting for idea', ind: 'status-idle' },
+  ops: { state: 'Waiting for idea', ind: 'status-idle' },
+  ceo: { state: 'Waiting for idea', ind: 'status-idle' },
+}
+
+const EMPTY_VERDICT = { market: '-', tech: '-', finance: '-' }
+
 const Dashboard = () => {
   const navigate = useNavigate()
+  const { user, logout } = useAuth()
+  const founderId = user?.id || user?.email || 'default-founder'
   const [currentView, setCurrentView] = useState('boardroom')
   const [ideaInput, setIdeaInput] = useState('')
   const [currentIdea, setCurrentIdea] = useState('Enter your startup idea below to begin')
@@ -24,7 +39,6 @@ const Dashboard = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true)
   const [discussionPhase, setDiscussionPhase] = useState('Idle')
   const [sessionId, setSessionId] = useState(null)
-  const [isConnected, setIsConnected] = useState(false)
   const discussionRef = useRef(null)
   const socketRef = useRef(null)
 
@@ -41,136 +55,273 @@ const Dashboard = () => {
   const [vaultIdeas, setVaultIdeas] = useState([])
   const [globalTasks, setGlobalTasks] = useState([])
   const [vaultStats, setVaultStats] = useState({ analyzed: 0, validated: 0, archived: 0 })
+  const [sessionTasks, setSessionTasks] = useState([])
+  const [activeSession, setActiveSession] = useState(null)
+  const [ideaSearch, setIdeaSearch] = useState('')
+  const [ideaFilter, setIdeaFilter] = useState('all')
+  const [historySearch, setHistorySearch] = useState('')
+  const [historyFilter, setHistoryFilter] = useState('all')
+  const [profileForm, setProfileForm] = useState({
+    startup_name: '',
+    tagline: '',
+    industry: '',
+    stage: 'idea',
+    problem: '',
+    solution: '',
+    target_audience: '',
+    website: '',
+    fundraising_stage: '',
+    team_size: 1,
+  })
+  const [profileLoading, setProfileLoading] = useState(false)
+  const [profileSaving, setProfileSaving] = useState(false)
+  const [profileMessage, setProfileMessage] = useState('')
 
-  // Connect to Boardroom WebSocket
-  useEffect(() => {
-    let isMounted = true
-    let reconnectTimer = null
+  const buildAgentStateMap = (state, ind) => ({
+    tech: { state, ind },
+    mkt: { state, ind },
+    fin: { state, ind },
+    prod: { state, ind },
+    ops: { state, ind },
+    ceo: { state, ind: ind === 'status-thinking' ? 'status-active' : ind },
+  })
 
-    const connect = () => {
-      console.log('--- Establishing Boardroom Neural Link ---')
-      const ws = new WebSocket('ws://127.0.0.1:8080/ws/boardroom')
-      socketRef.current = ws
+  const mapRoleToAgentKey = (role = '') => {
+    const normalizedRole = role.toLowerCase()
 
-      ws.onopen = () => {
-        console.log('--- Boardroom Neural Link Established ---')
-        setIsConnected(true)
+    if (['cto', 'technical lead', 'tech'].includes(normalizedRole)) return 'tech'
+    if (['cmo', 'marketing'].includes(normalizedRole)) return 'mkt'
+    if (['cfo', 'finance'].includes(normalizedRole)) return 'fin'
+    if (['cpo', 'product'].includes(normalizedRole)) return 'prod'
+    if (['coo', 'operations', 'ops'].includes(normalizedRole)) return 'ops'
+    if (['ceo', 'system'].includes(normalizedRole)) return 'ceo'
+    if (normalizedRole === 'founder') return 'founder'
+
+    return normalizedRole || 'ceo'
+  }
+
+  const formatHistoryItem = (item) => {
+    const role = item.role || 'System'
+    const roleKey = mapRoleToAgentKey(role)
+
+    return {
+      agent: roleKey,
+      av: role.substring(0, 2).toUpperCase(),
+      name: item.agent_name || item.agentName || role,
+      role,
+      text: item.content,
+      type: item.message_type || item.messageType || 'AGENT_ANALYSIS',
+      bg: roleKey === 'founder' ? 'linear-gradient(135deg,#6b7280,#9ca3af)' : undefined,
+    }
+  }
+
+  const applySessionData = (payload) => {
+    const consensus = payload.session?.consensus
+    const aggregateConfidence = consensus?.aggregateConfidence ?? consensus?.aggregate_confidence
+
+    setActiveSession(payload.session || null)
+    setSessionId(payload.session?.id || null)
+    setCurrentIdea(payload.session?.idea_text || payload.session?.title || 'Enter your startup idea below to begin')
+    setMessages((payload.history || []).map(formatHistoryItem))
+    setSessionTasks(payload.tasks || [])
+    setAgentStates(buildAgentStateMap('Review complete', 'status-idle'))
+
+    if (aggregateConfidence) {
+      setVerdict({
+        market: (aggregateConfidence * 10).toFixed(1),
+        tech: (aggregateConfidence * 9.5).toFixed(1),
+        finance: (aggregateConfidence * 9.2).toFixed(1),
+      })
+      setShowConsensus(true)
+      setDiscussionPhase('Consensus')
+    } else {
+      setShowConsensus(false)
+      setDiscussionPhase('Market Analysis')
+    }
+  }
+
+  const handleUnauthorized = () => {
+    logout()
+    navigate('/login')
+  }
+
+  const resetBoardroom = () => {
+    setSessionId(null)
+    setActiveSession(null)
+    setCurrentIdea('Enter your startup idea below to begin')
+    setIdeaInput('')
+    setMessages([])
+    setSessionTasks([])
+    setShowConsensus(false)
+    setDiscussionPhase('Idle')
+    setVerdict({ market: '-', tech: '-', finance: '-' })
+    setAgentStates(buildAgentStateMap('Waiting for idea', 'status-idle'))
+  }
+
+  const loadSessionDetails = async (id, view = 'boardroom') => {
+    const response = await apiFetch(`/api/sessions/${id}`)
+    const data = await response.json()
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        handleUnauthorized()
+        return
       }
 
-      ws.onmessage = (event) => {
-        const msg = JSON.parse(event.data)
-        console.log('Neural Signal:', msg)
-
-        if (msg.type === 'SESSION_READY') {
-          setSessionId(msg.session_id)
-          if (msg.history && msg.history.length > 0) {
-            const formattedHistory = msg.history.map(item => {
-              const roleKey = item.role.toLowerCase() === 'cpo' ? 'prod' : 
-                              item.role.toLowerCase() === 'coo' ? 'ops' : 
-                              item.role.toLowerCase() === 'founder' ? 'founder' :
-                              item.role.toLowerCase()
-              
-              return {
-                agent: roleKey,
-                av: (item.role || '??').substring(0, 2).toUpperCase(),
-                name: item.agent_name || 'Founder',
-                role: item.role,
-                text: item.content,
-                type: item.message_type || 'AGENT_ANALYSIS',
-                bg: roleKey === 'founder' ? 'linear-gradient(135deg,#6b7280,#9ca3af)' : undefined
-              }
-            })
-            setMessages(formattedHistory)
-          }
-        } else if (msg.type === 'IDEA_PROPOSED') {
-          setMessages(prev => [...prev, {
-            agent: 'founder',
-            av: 'F',
-            bg: 'linear-gradient(135deg,#6b7280,#9ca3af)',
-            name: 'Founder',
-            role: 'Idea Origin',
-            text: msg.data,
-            type: 'IDEA_PROPOSED'
-          }])
-        } else if (msg.type === 'AGENT_ANALYSIS' || msg.type === 'AGENT_CHALLENGE' || msg.type === 'RISK_ALERT') {
-          const agentData = msg.data
-          const roleKey = agentData.role.toLowerCase() === 'cpo' ? 'prod' : 
-                          agentData.role.toLowerCase() === 'coo' ? 'ops' : 
-                          agentData.role.toLowerCase()
-
-          setAgentStates(prev => ({
-            ...prev,
-            [roleKey]: { state: 'Speaking...', ind: 'status-active' }
-          }))
-
-          setMessages(prev => [...prev, {
-            agent: roleKey,
-            av: agentData.role.substring(0, 2).toUpperCase(),
-            name: agentData.agent_name,
-            role: agentData.role,
-            text: agentData.content,
-            type: msg.type
-          }])
-
-          setTimeout(() => {
-            setAgentStates(prev => ({
-              ...prev,
-              [roleKey]: { state: 'Listening', ind: 'status-idle' }
-            }))
-          }, 3000)
-
-        } else if (msg.type === 'CONSENSUS_SIGNAL') {
-          const consensus = msg.metadata?.consensus
-          if (consensus) {
-            setDiscussionPhase('Consensus')
-            setVerdict({
-              market: (consensus.aggregate_confidence * 10).toFixed(1),
-              tech: (consensus.aggregate_confidence * 9.5).toFixed(1),
-              finance: (consensus.aggregate_confidence * 9.2).toFixed(1)
-            })
-            setShowConsensus(true)
-          }
-        } else if (msg.type === 'STATUS_UPDATE') {
-          const textValue = typeof msg.data === 'string' ? msg.data : msg.data?.content || JSON.stringify(msg.data)
-          setDiscussionPhase(textValue.includes('Boardroom initialized') ? 'Market Analysis' : 'Synthesizing')
-          setMessages(prev => [...prev, {
-            agent: 'ceo', // Using CEO as placeholder for moderator visibility
-            av: 'B',
-            bg: 'linear-gradient(135deg,#7c3aed,#a78bfa)',
-            name: 'CoFounder Brain',
-            role: 'System',
-            text: textValue,
-            type: 'STATUS_UPDATE'
-          }])
-        }
-      }
-
-      ws.onclose = () => {
-        console.warn('--- Boardroom Neural Link Severed. Retrying in 3s ---')
-        setIsConnected(false)
-        if (isMounted) {
-          reconnectTimer = setTimeout(connect, 3000)
-        }
-      }
-
-      ws.onerror = (err) => {
-        console.error('Boardroom Neural Error:', err)
-      }
+      throw new Error(data.message || 'Unable to load the selected session')
     }
 
-    connect()
+    applySessionData(data)
+    setCurrentView(view)
+  }
 
-    return () => {
-      isMounted = false
-      if (reconnectTimer) clearTimeout(reconnectTimer)
-      if (socketRef.current) socketRef.current.close()
+  const updateTaskInState = (updatedTask) => {
+    setGlobalTasks((prev) => prev.map((task) => (task.id === updatedTask.id ? updatedTask : task)))
+    setSessionTasks((prev) => prev.map((task) => (task.id === updatedTask.id ? updatedTask : task)))
+  }
+
+  const changeTaskStatus = async (taskId, status) => {
+    const response = await apiFetch(`/api/tasks/${taskId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    })
+    const data = await response.json()
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        handleUnauthorized()
+        return
+      }
+
+      throw new Error(data.message || 'Unable to update task')
     }
-  }, [])
 
-  const startSession = () => {
+    updateTaskInState(data.task)
+  }
+
+  const loadCompanyProfile = async () => {
+    setProfileLoading(true)
+    setProfileMessage('')
+
+    try {
+      const response = await apiFetch('/api/company-profile')
+      const data = await response.json()
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          handleUnauthorized()
+          return
+        }
+
+        throw new Error(data.message || 'Unable to load company profile')
+      }
+
+      if (data.profile) {
+        setProfileForm({
+          startup_name: data.profile.startup_name || '',
+          tagline: data.profile.tagline || '',
+          industry: data.profile.industry || '',
+          stage: data.profile.stage || 'idea',
+          problem: data.profile.problem || '',
+          solution: data.profile.solution || '',
+          target_audience: data.profile.target_audience || '',
+          website: data.profile.website || '',
+          fundraising_stage: data.profile.fundraising_stage || '',
+          team_size: data.profile.team_size || 1,
+        })
+      } else {
+        setProfileForm({
+          startup_name: '',
+          tagline: '',
+          industry: '',
+          stage: 'idea',
+          problem: '',
+          solution: '',
+          target_audience: '',
+          website: '',
+          fundraising_stage: '',
+          team_size: 1,
+        })
+      }
+    } catch (error) {
+      console.error('Company Profile Error:', error)
+      setProfileMessage(error.message || 'Unable to load company profile right now.')
+    } finally {
+      setProfileLoading(false)
+    }
+  }
+
+  const saveCompanyProfile = async () => {
+    setProfileSaving(true)
+    setProfileMessage('')
+
+    try {
+      const response = await apiFetch('/api/company-profile', {
+        method: 'PATCH',
+        body: JSON.stringify(profileForm),
+      })
+      const data = await response.json()
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          handleUnauthorized()
+          return
+        }
+
+        throw new Error(data.message || 'Unable to save company profile')
+      }
+
+      setProfileForm({
+        startup_name: data.profile.startup_name || '',
+        tagline: data.profile.tagline || '',
+        industry: data.profile.industry || '',
+        stage: data.profile.stage || 'idea',
+        problem: data.profile.problem || '',
+        solution: data.profile.solution || '',
+        target_audience: data.profile.target_audience || '',
+        website: data.profile.website || '',
+        fundraising_stage: data.profile.fundraising_stage || '',
+        team_size: data.profile.team_size || 1,
+      })
+      setProfileMessage('Company profile saved successfully.')
+    } catch (error) {
+      console.error('Company Profile Save Error:', error)
+      setProfileMessage(error.message || 'Unable to save company profile right now.')
+    } finally {
+      setProfileSaving(false)
+    }
+  }
+
+  const loadVaultSummary = async () => {
+    const response = await apiFetch('/api/vault/summary')
+    const data = await response.json()
+
+    if (!response.ok) {
+      throw new Error(data.message || 'Failed to load vault summary')
+    }
+
+    setVaultIdeas(data)
+    setVaultStats({
+      analyzed: data.length,
+      validated: data.filter((idea) => idea.status === 'validated').length,
+      archived: data.filter((idea) => idea.status === 'archived').length,
+    })
+  }
+
+  const loadGlobalTasks = async () => {
+    const response = await apiFetch('/api/tasks/global')
+    const data = await response.json()
+
+    if (!response.ok) {
+      throw new Error(data.message || 'Failed to load tasks')
+    }
+
+    setGlobalTasks(data)
+  }
+
+  const startSession = async () => {
     const trimmed = ideaInput.trim()
-    const socket = socketRef.current
-    if (!trimmed || !socket || socket.readyState !== WebSocket.OPEN) {
+    if (!trimmed) {
       console.warn("🚫 Boardroom not ready for transmission.")
       return
     }
@@ -183,18 +334,41 @@ const Dashboard = () => {
     setDiscussionPhase('Analyzing')
 
     // Reset agent states to thinking
-    const thinkingStates = {}
-    Object.keys(agentStates).forEach(k => {
-      thinkingStates[k] = { state: 'Analyzing...', ind: 'status-thinking' }
-    })
-    setAgentStates(thinkingStates)
+    setAgentStates(buildAgentStateMap('Analyzing...', 'status-thinking'))
 
-    // Send idea to backend
-    socketRef.current.send(JSON.stringify({
-      type: 'PROPOSE_IDEA',
-      payload: trimmed,
-      session_id: sessionId
-    }))
+    try {
+      const response = await apiFetch('/api/sessions', {
+        method: 'POST',
+        body: JSON.stringify({ ideaText: trimmed }),
+      })
+      const data = await response.json()
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          handleUnauthorized()
+          return
+        }
+
+        throw new Error(data.message || 'Unable to create a session')
+      }
+
+      applySessionData(data)
+      setGlobalTasks(data.tasks || [])
+    } catch (error) {
+      console.error('Boardroom Session Error:', error)
+      setDiscussionPhase('Idle')
+      setAgentStates(buildAgentStateMap('Waiting for idea', 'status-idle'))
+      setMessages([
+        {
+          agent: 'ceo',
+          av: 'CF',
+          name: 'CoFounder Brain',
+          role: 'System',
+          text: error.message || 'Unable to start the boardroom session right now.',
+          type: 'STATUS_UPDATE',
+        },
+      ])
+    }
   }
 
   useEffect(() => {
@@ -205,34 +379,101 @@ const Dashboard = () => {
 
   // Fetch Vault Data
   useEffect(() => {
-    if (currentView === 'ideas') {
-      fetch('http://localhost:8080/api/vault/summary')
-        .then(res => res.json())
-        .then(data => {
-          setVaultIdeas(data)
-          // Calculate stats
-          const analyzed = data.length
-          const validated = data.filter(i => i.status === 'validated').length
-          const archived = data.filter(i => i.status === 'archived').length
-          setVaultStats({ analyzed, validated, archived })
-        })
-        .catch(err => console.error('Vault Fetch Error:', err))
+    if (currentView === 'ideas' || currentView === 'history' || currentView === 'settings') {
+      loadVaultSummary().catch((error) => {
+        console.error('Vault Fetch Error:', error)
+      })
     }
   }, [currentView])
 
   // Fetch Global Tasks
   useEffect(() => {
-    if (currentView === 'tasks') {
-      fetch('http://localhost:8080/api/tasks/global')
-        .then(res => res.json())
-        .then(data => setGlobalTasks(data))
-        .catch(err => console.error('Tasks Fetch Error:', err))
+    if (currentView === 'tasks' || currentView === 'settings') {
+      loadGlobalTasks().catch((error) => {
+        console.error('Tasks Fetch Error:', error)
+      })
     }
   }, [currentView])
 
+  useEffect(() => {
+    if (currentView === 'profile') {
+      loadCompanyProfile()
+    }
+  }, [currentView])
+
+  const filteredVaultIdeas = vaultIdeas.filter((idea) => {
+    const search = ideaSearch.trim().toLowerCase()
+    const matchesSearch =
+      !search ||
+      idea.title.toLowerCase().includes(search) ||
+      (idea.context || '').toLowerCase().includes(search) ||
+      (idea.agents || []).some((role) => role.toLowerCase().includes(search))
+
+    const matchesFilter = ideaFilter === 'all' || idea.status === ideaFilter
+    return matchesSearch && matchesFilter
+  })
+
+  const filteredHistoryIdeas = vaultIdeas.filter((idea) => {
+    const search = historySearch.trim().toLowerCase()
+    const matchesSearch =
+      !search ||
+      idea.title.toLowerCase().includes(search) ||
+      (idea.context || '').toLowerCase().includes(search) ||
+      (idea.agents || []).some((role) => role.toLowerCase().includes(search))
+
+    const matchesFilter =
+      historyFilter === 'all' ||
+      (historyFilter === 'high' && (idea.verdict || 0) >= 7.5) ||
+      (historyFilter === 'draft' && idea.status === 'draft')
+
+    return matchesSearch && matchesFilter
+  })
+
+  const historyConsensusRate = vaultIdeas.length > 0
+    ? `${Math.round((vaultIdeas.filter((idea) => idea.status === 'validated').length / vaultIdeas.length) * 100)}%`
+    : '0%'
+
+  const handleProfileFieldChange = (field, value) => {
+    setProfileForm((prev) => ({
+      ...prev,
+      [field]: value,
+    }))
+  }
+
+  const openIdeaSession = (id, view = 'boardroom') => {
+    loadSessionDetails(id, view).catch((error) => {
+      console.error('Load Session Error:', error)
+    })
+  }
+
+  const exportCurrentTranscript = async () => {
+    const transcript = messages.length > 0
+      ? messages.map((message) => `${message.name} (${message.role}): ${message.text}`).join('\n\n')
+      : vaultIdeas.map((idea) => `${idea.title} | ${idea.status} | ${idea.verdict ?? 'n/a'}\n${idea.context || ''}`).join('\n\n')
+
+    if (!transcript.trim()) {
+      return
+    }
+
+    try {
+      await navigator.clipboard.writeText(transcript)
+    } catch (error) {
+      console.error('Transcript Export Error:', error)
+    }
+  }
+
+  const updateTaskStatus = (taskId, status) => {
+    changeTaskStatus(taskId, status).catch((error) => {
+      console.error('Task Update Error:', error)
+    })
+  }
+
   const handleKeyDown = (e) => { if (e.key === 'Enter') startSession() }
   const switchView = (v) => setCurrentView(v)
-  const handleLogout = () => navigate('/')
+  const handleLogout = () => {
+    logout()
+    navigate('/')
+  }
 
   return (
     <div className="dashboard-container">
@@ -328,7 +569,7 @@ const Dashboard = () => {
           </div>
           <div className="topbar-right">
             <div className="dash-notif">🔔</div>
-            <div className="dash-user">AC</div>
+            <div className="dash-user">{user?.name ? user.name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase() : 'CF'}</div>
           </div>
         </div>
 
@@ -343,8 +584,8 @@ const Dashboard = () => {
                       <div className="live-badge"><div className="live-dot"></div>LIVE</div>
                     </div>
                     <div className="boardroom-controls">
-                      <button className="control-btn"><span className="control-icon">↻</span> Restart</button>
-                      <button className="control-btn export-btn"><span className="control-icon">↓</span> Export Log</button>
+                      <button className="control-btn" onClick={resetBoardroom}><span className="control-icon">↻</span> Restart</button>
+                      <button className="control-btn export-btn" onClick={exportCurrentTranscript}><span className="control-icon">↓</span> Export Log</button>
                     </div>
                   </div>
                   <div className="phase-tracker">
@@ -375,9 +616,9 @@ const Dashboard = () => {
                             <div className={`chat-bubble ${m.tone}`}>
                               {m.text}
                               <div className="chat-actions">
-                                <button className="chat-action-btn" title="Agree">👍</button>
-                                <button className="chat-action-btn" title="Elaborate">🔍 Elaborate</button>
-                                <button className="chat-action-btn" title="Counter argument">⚡ Counter</button>
+                                <button className="chat-action-btn" title="Agree" onClick={() => setIdeaInput(`I agree with ${m.name}. Turn that into a concrete next step.`)}>👍</button>
+                                <button className="chat-action-btn" title="Elaborate" onClick={() => setIdeaInput(`Elaborate on ${m.name}'s point and make it more specific.`)}>🔍 Elaborate</button>
+                                <button className="chat-action-btn" title="Counter argument" onClick={() => setIdeaInput(`Give me the strongest counter-argument to ${m.name}'s point.`)}>⚡ Counter</button>
                               </div>
                             </div>
                           </div>
@@ -388,9 +629,9 @@ const Dashboard = () => {
                   <div className="input-wrap">
                     {messages.length > 0 && !showConsensus && (
                       <div className="quick-prompts">
-                        <button className="prompt-chip">Pivot to B2B</button>
-                        <button className="prompt-chip">Charge $99/mo</button>
-                        <button className="prompt-chip">Detail the tech stack</button>
+                        <button className="prompt-chip" onClick={() => setIdeaInput('Pivot this concept toward a B2B buyer and tell me what changes.')}>Pivot to B2B</button>
+                        <button className="prompt-chip" onClick={() => setIdeaInput('Evaluate whether $99 per month is the right starting price for this.')}>Charge $99/mo</button>
+                        <button className="prompt-chip" onClick={() => setIdeaInput('Break down the most realistic MVP tech stack and architecture.')}>Detail the tech stack</button>
                       </div>
                     )}
                     <div className="input-row">
@@ -409,30 +650,25 @@ const Dashboard = () => {
                 </motion.div>
 
                 {/* Extracted Action Items */}
-                {messages.length > 2 && (
+                {sessionTasks.length > 0 && (
                   <motion.div className="dash-card glass action-card" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
                     <div className="dash-card-header" style={{ padding: '14px 20px' }}>
                       <div className="dash-card-title">Extracted Action Items</div>
-                      <button className="control-btn" style={{ padding: '4px 8px', fontSize: '11px' }}>Sync to Linear</button>
+                      <button className="control-btn" style={{ padding: '4px 8px', fontSize: '11px' }} onClick={() => switchView('tasks')}>Open Task Board</button>
                     </div>
                     <div className="panel-body" style={{ overflowY: 'auto', padding: '12px 20px' }}>
-                      <div className="action-row">
-                        <input type="checkbox" className="action-check" />
-                        <div style={{ flex: 1 }}>Define technical architecture scaling up to 10k users.</div>
-                        <div className="action-tag tech">TC (Tech)</div>
-                      </div>
-                      <div className="action-row">
-                        <input type="checkbox" className="action-check" />
-                        <div style={{ flex: 1 }}>Build detailed target profile and acquisition thesis.</div>
-                        <div className="action-tag mkt">MK (Mktg)</div>
-                      </div>
-                      {messages.length > 5 && (
-                        <div className="action-row">
-                          <input type="checkbox" className="action-check" />
-                          <div style={{ flex: 1 }}>Map legal & compliance dependencies.</div>
-                          <div className="action-tag ops">OM (Ops)</div>
+                      {sessionTasks.map((task) => (
+                        <div className="action-row" key={task.id}>
+                          <input
+                            type="checkbox"
+                            className="action-check"
+                            checked={task.status === 'completed'}
+                            onChange={() => updateTaskStatus(task.id, task.status === 'completed' ? 'queued' : 'completed')}
+                          />
+                          <div style={{ flex: 1 }}>{task.title}</div>
+                          <div className={`action-tag ${mapRoleToAgentKey(task.owner_role)}`}>{task.owner_role}</div>
                         </div>
-                      )}
+                      ))}
                     </div>
                   </motion.div>
                 )}
@@ -482,7 +718,7 @@ const Dashboard = () => {
                       <div className="consensus-banner show">
                         <div className="consensus-title">Consensus reached</div>
                         <div className="consensus-text">Team consensus: high-potential idea with manageable risk. Recommended raise: $650k pre-seed. Phase the build.</div>
-                        <button className="exec-btn">Enter Execution Mode →</button>
+                        <button className="exec-btn" onClick={() => switchView('tasks')}>Enter Execution Mode →</button>
                       </div>
                     )}
                   </div>
@@ -517,7 +753,7 @@ const Dashboard = () => {
                   <p className="view-desc">Centralized intelligence for all your conceptualized startup ideas.</p>
                 </div>
                 <div className="header-actions">
-                  <button className="exec-btn" style={{ width: 'auto', padding: '10px 20px', fontSize: '12px' }}>+ New Strategy Session</button>
+                  <button className="exec-btn" style={{ width: 'auto', padding: '10px 20px', fontSize: '12px' }} onClick={() => switchView('boardroom')}>+ New Strategy Session</button>
                 </div>
               </div>
 
@@ -547,13 +783,13 @@ const Dashboard = () => {
               <div className="table-controls">
                 <div className="search-wrap">
                   <span className="search-icon">🔍</span>
-                  <input type="text" className="search-input" placeholder="Search ideas, industries, or keywords..." />
+                  <input type="text" className="search-input" placeholder="Search ideas, industries, or keywords..." value={ideaSearch} onChange={(e) => setIdeaSearch(e.target.value)} />
                 </div>
                 <div className="filter-group">
-                  <button className="filter-btn active">All</button>
-                  <button className="filter-btn">Validated</button>
-                  <button className="filter-btn">Analyzing</button>
-                  <button className="filter-btn">Draft</button>
+                  <button className={`filter-btn ${ideaFilter === 'all' ? 'active' : ''}`} onClick={() => setIdeaFilter('all')}>All</button>
+                  <button className={`filter-btn ${ideaFilter === 'validated' ? 'active' : ''}`} onClick={() => setIdeaFilter('validated')}>Validated</button>
+                  <button className={`filter-btn ${ideaFilter === 'analyzing' ? 'active' : ''}`} onClick={() => setIdeaFilter('analyzing')}>Analyzing</button>
+                  <button className={`filter-btn ${ideaFilter === 'draft' ? 'active' : ''}`} onClick={() => setIdeaFilter('draft')}>Draft</button>
                 </div>
               </div>
 
@@ -574,7 +810,7 @@ const Dashboard = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {vaultIdeas.map((idea, idx) => (
+                    {filteredVaultIdeas.map((idea, idx) => (
                       <motion.tr 
                         key={idx}
                         initial={{ opacity: 0, x: -10 }}
@@ -628,13 +864,20 @@ const Dashboard = () => {
                         </td>
                         <td style={{ padding: '24px' }}>
                           <div style={{ display: 'flex', gap: '8px' }}>
-                            <button className="icon-btn" title="Open Analysis">
+                            <button className="icon-btn" title="Open Analysis" onClick={() => openIdeaSession(idea.id)}>
                               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
                             </button>
                           </div>
                         </td>
                       </motion.tr>
                     ))}
+                    {filteredVaultIdeas.length === 0 && (
+                      <tr>
+                        <td colSpan="6" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
+                          No sessions match your current filters.
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -649,7 +892,7 @@ const Dashboard = () => {
                   <p className="view-desc">Track execution status for actions from your sessions.</p>
                 </div>
                 <div className="header-actions">
-                  <button className="exec-btn" style={{ width: 'auto', padding: '10px 20px', fontSize: '12px' }}>+ New Column</button>
+                  <button className="exec-btn" style={{ width: 'auto', padding: '10px 20px', fontSize: '12px' }} onClick={() => loadGlobalTasks().catch((error) => console.error('Tasks Refresh Error:', error))}>Refresh Tasks</button>
                 </div>
               </div>
 
@@ -664,7 +907,7 @@ const Dashboard = () => {
                         <div className="task-title">{task.title}</div>
                         <div className="task-footer">
                           <div className="mini-av">{task.owner_role.substring(0, 2)}</div>
-                          <div className="task-time">Pending</div>
+                          <button className="control-btn" style={{ padding: '4px 8px', fontSize: '10px' }} onClick={() => updateTaskStatus(task.id, 'active')}>Start</button>
                         </div>
                       </motion.div>
                     ))}
@@ -681,7 +924,7 @@ const Dashboard = () => {
                         <div className="task-title">{task.title}</div>
                         <div className="task-footer">
                           <div className="mini-av">{task.owner_role.substring(0, 2)}</div>
-                          <div className="task-active-label">Sprinting</div>
+                          <button className="control-btn" style={{ padding: '4px 8px', fontSize: '10px' }} onClick={() => updateTaskStatus(task.id, 'completed')}>Complete</button>
                         </div>
                       </motion.div>
                     ))}
@@ -696,7 +939,7 @@ const Dashboard = () => {
                         <div className="task-title">{task.title}</div>
                         <div className="task-footer">
                           <div className="mini-av">{task.owner_role.substring(0, 2)}</div>
-                          <div className="task-time">Done</div>
+                          <button className="control-btn" style={{ padding: '4px 8px', fontSize: '10px' }} onClick={() => updateTaskStatus(task.id, 'queued')}>Reopen</button>
                         </div>
                       </motion.div>
                     ))}
@@ -714,7 +957,7 @@ const Dashboard = () => {
                   <p className="view-desc">A complete historical timeline of your boardroom brainstorms and strategic decisions.</p>
                 </div>
                 <div className="header-actions">
-                  <button className="icon-btn" title="Export All Logs">📥</button>
+                  <button className="icon-btn" title="Export All Logs" onClick={exportCurrentTranscript}>📥</button>
                 </div>
               </div>
 
@@ -722,32 +965,32 @@ const Dashboard = () => {
                 <div className="dash-card glass stat-card">
                   <div className="stat-glow" style={{ background: 'rgba(139, 92, 246, 0.15)' }}></div>
                   <div className="stat-label">Total Brainstorms</div>
-                  <div className="stat-value">48</div>
-                  <div className="stat-change" style={{ color: '#4ade80' }}>+12 this week</div>
+                  <div className="stat-value">{vaultIdeas.length}</div>
+                  <div className="stat-change" style={{ color: '#4ade80' }}>Live from your vault</div>
                 </div>
                 <div className="dash-card glass stat-card">
                   <div className="stat-glow" style={{ background: 'rgba(34, 197, 94, 0.15)' }}></div>
                   <div className="stat-label">Consensus Rate</div>
-                  <div className="stat-value">72%</div>
-                  <div className="stat-change">Strong Alignment</div>
+                  <div className="stat-value">{historyConsensusRate}</div>
+                  <div className="stat-change">Validated sessions share</div>
                 </div>
                 <div className="dash-card glass stat-card">
                    <div className="stat-glow" style={{ background: 'rgba(239, 68, 68, 0.15)' }}></div>
                    <div className="stat-label">Total Insights</div>
-                   <div className="stat-value">1,240</div>
-                   <div className="stat-change">Extracted by Agents</div>
+                   <div className="stat-value">{vaultIdeas.reduce((count, idea) => count + (idea.agents?.length || 0), 0)}</div>
+                   <div className="stat-change">Agent perspectives logged</div>
                 </div>
               </div>
 
               <div className="table-controls">
                 <div className="search-wrap">
                   <span className="search-icon">🔍</span>
-                  <input type="text" className="search-input" placeholder="Search sessions by topic or agent..." />
+                  <input type="text" className="search-input" placeholder="Search sessions by topic or agent..." value={historySearch} onChange={(e) => setHistorySearch(e.target.value)} />
                 </div>
                 <div className="filter-group">
-                  <button className="filter-btn active">All Time</button>
-                  <button className="filter-btn">High Verdicts</button>
-                  <button className="filter-btn">Drafts</button>
+                  <button className={`filter-btn ${historyFilter === 'all' ? 'active' : ''}`} onClick={() => setHistoryFilter('all')}>All Time</button>
+                  <button className={`filter-btn ${historyFilter === 'high' ? 'active' : ''}`} onClick={() => setHistoryFilter('high')}>High Verdicts</button>
+                  <button className={`filter-btn ${historyFilter === 'draft' ? 'active' : ''}`} onClick={() => setHistoryFilter('draft')}>Drafts</button>
                 </div>
               </div>
 
@@ -765,7 +1008,7 @@ const Dashboard = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {vaultIdeas.map((idea, idx) => (
+                    {filteredHistoryIdeas.map((idea, idx) => (
                       <tr key={idx}>
                         <td style={{ fontWeight: 600 }}>{idea.title}</td>
                         <td><span className={`score-badge ${idea.verdict > 7.5 ? 'high' : idea.verdict > 5 ? 'mid' : 'low'}`}>
@@ -782,13 +1025,13 @@ const Dashboard = () => {
                         <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
                           {new Date(idea.activity).toLocaleString()}
                         </td>
-                        <td><button className="icon-btn" title="View Transcript">📄</button></td>
+                        <td><button className="icon-btn" title="View Transcript" onClick={() => openIdeaSession(idea.id)}>📄</button></td>
                       </tr>
                     ))}
-                    {vaultIdeas.length === 0 && (
+                    {filteredHistoryIdeas.length === 0 && (
                       <tr>
                         <td colSpan="6" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
-                          No historical sessions found.
+                          No historical sessions match your filters.
                         </td>
                       </tr>
                     )}
@@ -798,10 +1041,95 @@ const Dashboard = () => {
             </motion.div>
           )}
 
-          {['profile', 'documents', 'okrs', 'pipeline', 'settings'].includes(currentView) && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
-               {currentView.toUpperCase()} PAGE
-               <p>This module is currently being finalized by the AI agents.</p>
+          {currentView === 'profile' && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ display: 'grid', gap: '24px' }}>
+              <div className="dash-card glass" style={{ padding: '24px' }}>
+                <div className="dash-card-header" style={{ marginBottom: '20px' }}>
+                  <div className="dash-card-title">Company Profile</div>
+                  <button className="exec-btn" style={{ width: 'auto', padding: '10px 18px', fontSize: '12px' }} onClick={saveCompanyProfile} disabled={profileSaving}>
+                    {profileSaving ? 'Saving...' : 'Save Profile'}
+                  </button>
+                </div>
+                {profileMessage && <div style={{ marginBottom: '16px', color: '#cbd5e1' }}>{profileMessage}</div>}
+                {profileLoading ? (
+                  <div style={{ color: 'var(--text-muted)' }}>Loading company profile...</div>
+                ) : (
+                  <div style={{ display: 'grid', gap: '16px', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
+                    <label style={{ display: 'grid', gap: '8px' }}>
+                      <span>Startup Name</span>
+                      <input className="search-input" value={profileForm.startup_name} onChange={(e) => handleProfileFieldChange('startup_name', e.target.value)} placeholder="Acme AI" />
+                    </label>
+                    <label style={{ display: 'grid', gap: '8px' }}>
+                      <span>Tagline</span>
+                      <input className="search-input" value={profileForm.tagline} onChange={(e) => handleProfileFieldChange('tagline', e.target.value)} placeholder="Your one-line pitch" />
+                    </label>
+                    <label style={{ display: 'grid', gap: '8px' }}>
+                      <span>Industry</span>
+                      <input className="search-input" value={profileForm.industry} onChange={(e) => handleProfileFieldChange('industry', e.target.value)} placeholder="SaaS, Fintech, AI..." />
+                    </label>
+                    <label style={{ display: 'grid', gap: '8px' }}>
+                      <span>Stage</span>
+                      <select className="search-input" value={profileForm.stage} onChange={(e) => handleProfileFieldChange('stage', e.target.value)}>
+                        <option value="idea">Idea</option>
+                        <option value="validation">Validation</option>
+                        <option value="mvp">MVP</option>
+                        <option value="growth">Growth</option>
+                      </select>
+                    </label>
+                    <label style={{ display: 'grid', gap: '8px' }}>
+                      <span>Target Audience</span>
+                      <input className="search-input" value={profileForm.target_audience} onChange={(e) => handleProfileFieldChange('target_audience', e.target.value)} placeholder="Who is this for?" />
+                    </label>
+                    <label style={{ display: 'grid', gap: '8px' }}>
+                      <span>Website</span>
+                      <input className="search-input" value={profileForm.website} onChange={(e) => handleProfileFieldChange('website', e.target.value)} placeholder="https://example.com" />
+                    </label>
+                    <label style={{ display: 'grid', gap: '8px' }}>
+                      <span>Fundraising Stage</span>
+                      <input className="search-input" value={profileForm.fundraising_stage} onChange={(e) => handleProfileFieldChange('fundraising_stage', e.target.value)} placeholder="Bootstrapped / Pre-seed / Seed" />
+                    </label>
+                    <label style={{ display: 'grid', gap: '8px' }}>
+                      <span>Team Size</span>
+                      <input className="search-input" type="number" min="1" value={profileForm.team_size} onChange={(e) => handleProfileFieldChange('team_size', Number(e.target.value) || 1)} />
+                    </label>
+                    <label style={{ display: 'grid', gap: '8px', gridColumn: '1 / -1' }}>
+                      <span>Problem</span>
+                      <textarea className="search-input" rows="4" value={profileForm.problem} onChange={(e) => handleProfileFieldChange('problem', e.target.value)} placeholder="What painful problem are you solving?" />
+                    </label>
+                    <label style={{ display: 'grid', gap: '8px', gridColumn: '1 / -1' }}>
+                      <span>Solution</span>
+                      <textarea className="search-input" rows="4" value={profileForm.solution} onChange={(e) => handleProfileFieldChange('solution', e.target.value)} placeholder="Describe the solution and product wedge." />
+                    </label>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+
+          {currentView === 'settings' && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ display: 'grid', gap: '24px' }}>
+              <div className="dash-card glass" style={{ padding: '24px' }}>
+                <div className="dash-card-title" style={{ marginBottom: '16px' }}>Account</div>
+                <div style={{ display: 'grid', gap: '10px', color: '#cbd5e1' }}>
+                  <div><strong>Name:</strong> {user?.name || 'Unknown user'}</div>
+                  <div><strong>Email:</strong> {user?.email || 'Unknown email'}</div>
+                  <div><strong>Saved Sessions:</strong> {vaultIdeas.length}</div>
+                  <div><strong>Tracked Tasks:</strong> {globalTasks.length}</div>
+                </div>
+                <div style={{ marginTop: '20px' }}>
+                  <button className="exec-btn" style={{ width: 'auto', padding: '10px 18px', fontSize: '12px' }} onClick={handleLogout}>Log Out</button>
+                </div>
+              </div>
+            </motion.div>
+          )}
+
+          {['documents', 'okrs', 'pipeline'].includes(currentView) && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="dash-card glass" style={{ padding: '32px', color: 'var(--text-muted)' }}>
+              <div className="dash-card-title" style={{ marginBottom: '12px', color: '#fff' }}>Current Release Focus</div>
+              <p style={{ margin: 0, lineHeight: 1.6 }}>
+                This release is production-focused around idea analysis, session history, task tracking, company profile, and account settings.
+                Documents, OKRs, and the investor pipeline are intentionally left for a later release so the current workflow stays clean and reliable.
+              </p>
             </motion.div>
           )}
         </div>

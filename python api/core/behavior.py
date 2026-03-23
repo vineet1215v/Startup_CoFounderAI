@@ -46,8 +46,8 @@ INTERRUPTION_PRIORITY = {
 }
 
 EXECUTION_CONDITIONS = {
-    "consensus_confidence": 0.72,
-    "minimum_supporting_agents": 3,
+    "consensus_confidence": 0.8,
+    "minimum_supporting_agents": 5,
 }
 
 AGENT_PROFILES: Dict[str, AgentProfile] = {
@@ -70,7 +70,7 @@ AGENT_PROFILES: Dict[str, AgentProfile] = {
         role="CTO",
         color="#3b82f6",
         persona="Pragmatic CTO focused on architecture, reliability, security, and delivery feasibility.",
-        expertise=["architecture", "scalability", "latency", "infra", "stack", "backend", "security", "ecommerce", "website", "technology"],
+        expertise=["architecture", "scalability", "latency", "infra", "stack", "backend", "security", "website", "technology"],
         tone="Practical, concise, and systems-first.",
         base_threshold=0.42,
         dominance=0.85,
@@ -97,7 +97,7 @@ AGENT_PROFILES: Dict[str, AgentProfile] = {
         expertise=["market", "acquisition", "brand", "positioning", "competitor", "demand", "growth"],
         tone="Commercial, sharp, and customer-aware.",
         base_threshold=0.61,
-        dominance=0.7,
+        dominance=0.70,
     ),
     "product": AgentProfile(
         key="product",
@@ -106,7 +106,7 @@ AGENT_PROFILES: Dict[str, AgentProfile] = {
         role="CPO",
         color="#06b6d4",
         persona="User-centric product leader focused on onboarding, retention, MVP scope, and differentiation.",
-        expertise=["ux", "retention", "onboarding", "feature", "journey", "mvp", "workflow", "ecommerce", "platform", "user experience"],
+        expertise=["ux", "retention", "onboarding", "feature", "journey", "mvp", "workflow", "platform", "user experience"],
         tone="Structured, user-centered, and prioritization-heavy.",
         base_threshold=0.42,
         dominance=0.76,
@@ -121,7 +121,7 @@ AGENT_PROFILES: Dict[str, AgentProfile] = {
         expertise=["execution", "timeline", "owner", "dependencies", "ops", "sprint", "blocker"],
         tone="Concrete, procedural, and delivery-oriented.",
         base_threshold=0.58,
-        dominance=0.8,
+        dominance=0.80,
     ),
     "core": AgentProfile(
         key="core",
@@ -132,7 +132,7 @@ AGENT_PROFILES: Dict[str, AgentProfile] = {
         persona="Neutral moderator who tracks discussion quality, convergence, and execution readiness.",
         expertise=["consensus", "risk", "decision", "timeline", "owner", "next step", "moderation"],
         tone="Neutral, clear, and governance-focused.",
-        base_threshold=0.4,
+        base_threshold=0.40,
         dominance=1.0,
     ),
 }

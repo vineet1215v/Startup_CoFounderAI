@@ -52,15 +52,14 @@ class SpecialistAgent(CognitiveAgent):
     async def process_new_idea(self, data: str, perception: dict, session_id: str, event: Dict[str, str]) -> None:
         research = await self.research(data, perception, session_id)
         prompt = (
-            f"Role: {self.persona}\n"
-            f"Mode: {self.mode}\n"
+            f"You are {self.name}, the {self.role} in a startup boardroom.\n"
+            f"Persona: {self.persona}\n"
             f"Discussion phase: {perception['phase']}\n"
             f"Founder idea: {data}\n"
             f"Research findings: {research}\n"
-            f"Tone: professional realism.\n"
-            f"Respond only from the {self.role} perspective.\n"
-            "If you disagree with the likely direction, make that disagreement explicit and concrete.\n"
-            "Keep the response concise and decision-useful."
+            "Speak naturally as if in a live boardroom meeting. Start with your name and role, then give your expert opinion.\n"
+            "Be direct, use business language, and if you see risks or opportunities, call them out.\n"
+            "Keep it to 2-3 sentences, actionable and realistic."
         )
         insight = await self._generate_text(prompt, self._fallback_idea_insight(data))
         decision = await self.decide_participation(perception, research, insight, session_id)
@@ -80,16 +79,21 @@ class SpecialistAgent(CognitiveAgent):
         if data.get("role") == self.role:
             return
         research = await self.research(data, perception, session_id)
-        if not research.get("domain_signals") and perception["risk_pressure"] < 0.75:
+
+        # Allow broader debate; specialists should engage in discussion even when domain signals are weak,
+        # as long as the statement is relevant and we can add new value.
+        if perception["relevance"] < 0.2:
             return
+
         prompt = (
-            f"Role: {self.persona}\n"
-            f"Mode: {self.mode}\n"
+            f"You are {self.name}, the {self.role} in a startup boardroom.\n"
+            f"Persona: {self.persona}\n"
             f"Discussion phase: {perception['phase']}\n"
-            f"Peer said: {data.get('content', '')}\n"
+            f"Peer {data.get('role')} ({data.get('agent_name')}) said: {data.get('content', '')}\n"
             f"Research findings: {research}\n"
-            "Decide whether you should support, refine, or challenge the statement.\n"
-            "Respond with SILENCE if there is no unique value to add."
+            "Respond naturally in the boardroom. Address the peer by name if relevant, agree, disagree, or build on their point.\n"
+            "Include a specific suggestion or question to advance the discussion.\n"
+            "Keep it conversational, 2-3 sentences, like real experts debating."
         )
         insight = await self._generate_text(prompt, self._fallback_peer_insight(data))
         if insight.strip().upper() == "SILENCE":
@@ -117,7 +121,7 @@ class CoreModeratorAgent(CognitiveAgent):
     async def process_new_idea(self, data: str, perception: dict, session_id: str, event: Dict[str, str]) -> None:
         await storage.update_session_status(session_id, "analysis")
         await self.speak(
-            "Boardroom initialized. We are in strategic analysis mode. Specialists will examine strategy, market, product, risk, and execution before we move to a founder-confirmed decision.",
+            "Boardroom initialized. Specialists will independently inspect market, product, finance, technology, and execution risk before converging on a decision.",
             session_id=session_id,
             event_type=EventType.STATUS_UPDATE,
             parent_id=event.get("id"),
@@ -128,6 +132,7 @@ class CoreModeratorAgent(CognitiveAgent):
         messages = await storage.list_conversations(session_id)
         if len(messages) % self.summary_interval != 0:
             return
+
         consensus = evaluate_consensus(messages)
         summary = self._summarize(consensus)
         await self.speak(
@@ -138,21 +143,31 @@ class CoreModeratorAgent(CognitiveAgent):
             confidence=max(0.7, consensus["aggregate_confidence"]),
             metadata={"consensus": consensus},
         )
-        if consensus["consensus"]:
-            decision = await storage.save_decision(
-                session_id,
-                "Boardroom reached sufficient consensus to request founder confirmation for execution.",
-                consensus["aggregate_confidence"],
-                consensus,
-                status="awaiting_founder",
-            )
-            await self.speak(
-                "Consensus trend detected. Founder confirmation is recommended before entering execution mode.",
-                session_id=session_id,
-                event_type=EventType.CONSENSUS_SIGNAL,
-                confidence=consensus["aggregate_confidence"],
-                metadata={"decision_id": decision["id"], "consensus": consensus},
-            )
+
+        if not consensus["consensus"]:
+            return
+
+        session = await storage.get_session(session_id)
+        founder_id = session.get("founder_id") if session else "default-founder"
+        decisions = await storage.list_decisions(session_id, founder_id)
+        if decisions:
+            return
+
+        decision = await storage.save_decision(
+            session_id=session_id,
+            founder_id=founder_id,
+            summary="Boardroom consensus reached. The system is ready to shift into execution planning.",
+            confidence=consensus["aggregate_confidence"],
+            consensus=consensus,
+            status="execution_started",
+        )
+        await self.speak(
+            "Consensus reached. Moving from validation into execution planning with specialist-owned next steps.",
+            session_id=session_id,
+            event_type=EventType.CONSENSUS_SIGNAL,
+            confidence=consensus["aggregate_confidence"],
+            metadata={"decision_id": decision["id"], "consensus": consensus},
+        )
 
     def _summarize(self, consensus: Dict) -> str:
         supporters = ", ".join(consensus["supporting_agents"]) or "no specialists yet"

@@ -60,8 +60,8 @@ class CognitiveAgent(ABC):
         event_type = event["type"]
         data = event["data"]
         text = self._extract_text(data).lower()
-        keyword_hits = sum(1 for k in self.domain_keywords if k in text)
-        relevance = min(1.0, 0.14 + (keyword_hits * 0.18))
+        keyword_hits = sum(1 for keyword in self.domain_keywords if keyword in text)
+        relevance = min(1.0, 0.3 + (keyword_hits * 0.18))
         if event_type == EventType.IDEA_PROPOSED.value:
             relevance = max(relevance, 0.82)
         urgency = 0.85 if any(token in text for token in ("urgent", "now", "immediately", "critical")) else 0.42
@@ -86,7 +86,7 @@ class CognitiveAgent(ABC):
     async def research(self, context: Any, perception: Dict[str, Any], session_id: str) -> Dict[str, Any]:
         text = self._extract_text(context).lower()
         memory_hits = await storage.search_memory(session_id, self.role, text, limit=3)
-        domain_signals = [k for k in self.domain_keywords if k in text][:6]
+        domain_signals = [keyword for keyword in self.domain_keywords if keyword in text][:6]
         confidence = self._confidence_score(domain_signals, memory_hits, perception)
         findings = {
             "domain_signals": domain_signals,
@@ -155,7 +155,8 @@ class CognitiveAgent(ABC):
         confidence: float = 0.0,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        self.recent_speaking_penalty = min(0.5, self.recent_speaking_penalty + 0.18)
+        # Keep the discussion flowing. Lower speaking penalty and increase recovery speed.
+        self.recent_speaking_penalty = min(0.4, self.recent_speaking_penalty + 0.12)
         payload = {
             "agent_id": self.agent_id,
             "agent_name": self.name,
@@ -177,9 +178,13 @@ class CognitiveAgent(ABC):
             parent_id=parent_id,
             priority=payload["interruption_priority"],
         )
+
+        session = await storage.get_session(session_id)
+        founder_id = session.get("founder_id") if session else "default-founder"
         await storage.add_conversation(
             session_id,
             content,
+            founder_id=founder_id,
             role=self.role,
             agent_name=self.name,
             message_type=event_type.value,
@@ -205,8 +210,9 @@ class CognitiveAgent(ABC):
         )
 
     async def cool_down(self) -> None:
-        await asyncio.sleep(6)
-        self.recent_speaking_penalty = max(0.0, self.recent_speaking_penalty - 0.14)
+        # Allow multiple follow-ups in the same discussion window by accelerating recovery.
+        await asyncio.sleep(4)
+        self.recent_speaking_penalty = max(0.0, self.recent_speaking_penalty - 0.08)
 
     async def remember(self, memory_type: str, data: Dict[str, Any], session_id: str) -> None:
         self.memory.append({"type": memory_type, "data": data, "ts": asyncio.get_event_loop().time()})
@@ -223,7 +229,7 @@ class CognitiveAgent(ABC):
     def _novelty_score(self, insight: str) -> float:
         if not insight:
             return 0.0
-        recent_text = " ".join(self._extract_text(m["data"]).lower() for m in self.memory[-8:])
+        recent_text = " ".join(self._extract_text(memory["data"]).lower() for memory in self.memory[-8:])
         overlap = sum(1 for token in insight.lower().split()[:30] if token in recent_text)
         return max(0.2, 1.0 - (overlap / 26.0))
 
@@ -257,7 +263,7 @@ class CognitiveAgent(ABC):
         if phase == "middle":
             return 0.76
         if phase == "late" and intent in {"execution", "risk"}:
-            return 0.9
+            return 0.90
         return 0.62
 
     def _should_stay_silent(self, perception: Dict[str, Any], novelty: float, confidence: float) -> bool:
@@ -265,6 +271,14 @@ class CognitiveAgent(ABC):
             return True
         if novelty < 0.32 and confidence < 0.7:
             return True
+
+        # In early and middle discussion phases, encourage sustained debate even when agents have spoken recently.
+        if perception["phase"] in {"early", "middle"}:
+            if self.recent_speaking_penalty > 0.45 and perception["urgency"] < 0.75:
+                return True
+            return False
+
+        # In late phase, apply stronger throttling to avoid repetitive noise.
         if self.recent_speaking_penalty > 0.28 and perception["urgency"] < 0.75:
             return True
         return False
@@ -276,7 +290,7 @@ class CognitiveAgent(ABC):
             for key in ("content", "idea", "summary", "topic", "payload", "title"):
                 if key in data and isinstance(data[key], str):
                     return data[key]
-            return " ".join(str(v) for v in data.values() if isinstance(v, str))
+            return " ".join(str(value) for value in data.values() if isinstance(value, str))
         return str(data)
 
     @abstractmethod
