@@ -22,6 +22,44 @@ const consensusSchema = new mongoose.Schema(
   { _id: false },
 )
 
+const marketIntelSchema = new mongoose.Schema({
+  tam_low: {
+    type: Number,
+    min: 0,
+    default: null
+  },
+  tam_high: {
+    type: Number,
+    min: 0,
+    default: null
+  },
+  saturation_pct: {
+    type: Number,
+    min: 0,
+    max: 100,
+    default: null
+  },
+  trend_score: {
+    type: Number,
+    min: 0,
+    max: 10,
+    default: null
+  },
+  competitors: [{
+    type: String,
+    trim: true
+  }],
+  insights: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  last_updated: {
+    type: Date,
+    default: Date.now
+  }
+}, { _id: false })
+
 const sessionSchema = new mongoose.Schema(
   {
     userId: {
@@ -56,6 +94,7 @@ const sessionSchema = new mongoose.Schema(
       max: 10,
       default: null,
     },
+    marketIntel: marketIntelSchema,
     agents: {
       type: [String],
       default: [],
@@ -95,3 +134,4 @@ const sessionSchema = new mongoose.Schema(
 const Session = mongoose.model('Session', sessionSchema)
 
 export default Session
+

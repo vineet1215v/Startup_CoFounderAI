@@ -27,7 +27,7 @@ export const analyzeIdeaGroq = async (ideaText) => {
     const sessionId = "groq-" + Date.now();
     const sessionTitle = ideaText.substring(0, 50) + '...';
 
-const prompt = `RESPOND WITH JSON ONLY. NO OTHER TEXT.
+    const prompt = `RESPOND WITH JSON ONLY. NO OTHER TEXT.
 
 Analyze this startup idea from 3 perspectives:
 
@@ -152,6 +152,86 @@ Generate 3-5 actionable next-step tasks. Return ONLY valid JSON array:
   } catch (error) {
     console.error('Groq Analysis Error:', error);
     throw new Error('Groq analysis failed');
+  }
+};
+
+export const analyzeChatContext = async (messages) => {
+  try {
+    if (!messages || messages.length === 0) {
+      return {
+        tam_low: null,
+        tam_high: null,
+        saturation_pct: null,
+        trend_score: null,
+        competitors: [],
+        insights: 'No chat context available for analysis.',
+        last_updated: new Date()
+      };
+    }
+
+    const chatContext = messages.map(m => `${m.agent_name || m.role}: ${m.content.substring(0, 500)}`).join('\n\n');
+
+    const prompt = `RESPOND WITH JSON ONLY. NO OTHER TEXT.
+
+Analyze this ongoing chat conversation about a startup for MARKET INTELLIGENCE:
+
+${chatContext}
+
+EXTRACTION FORMAT - Use realistic numbers based on discussion:
+{
+  "tam_low": 50000000,
+  "tam_high": 500000000,
+  "saturation_pct": 65,
+  "trend_score": 8.2,
+  "competitors": ["Competitor A", "Competitor B"],
+  "insights": "2-3 sentences of key market takeaways from conversation."
+}
+
+NOTES:
+- TAM: Total Addressable Market range in USD (low-high estimate)
+- Saturation: % (0-100) how crowded space is
+- Trend: Upward momentum score /10
+- Competitors: Top 1-5 mentioned or implied
+- Insights: Concise bullets from chat
+
+JSON:`;
+
+    const completion = await openai.chat.completions.create({
+      model: model,
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    const text = completion.choices[0].message.content.trim();
+    
+    let intel;
+    try {
+      intel = JSON.parse(text);
+    } catch (e) {
+      console.warn('Chat context JSON parse failed:', e);
+      intel = {
+        tam_low: null,
+        tam_high: null,
+        saturation_pct: null,
+        trend_score: null,
+        competitors: [],
+        insights: text.substring(0, 500),
+      };
+    }
+
+    intel.last_updated = new Date();
+
+    return intel;
+  } catch (error) {
+    console.error('Groq Chat Analysis Error:', error);
+    return {
+      tam_low: null,
+      tam_high: null,
+      saturation_pct: null,
+      trend_score: null,
+      competitors: [],
+      insights: 'Analysis failed.',
+      last_updated: new Date()
+    };
   }
 };
 

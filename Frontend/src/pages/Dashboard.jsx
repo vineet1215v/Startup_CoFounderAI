@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { apiFetch } from '../config/api'
+import { apiFetch, analyzeSessionMarketIntel } from '../config/api'
 // WebSocket functionality removed - now using direct API calls
 // import { apiFetch, boardroomSocket } from '../config/api'
 // socket.io handled by boardroomSocket() from api.js
@@ -79,6 +79,10 @@ const discussionRef = useRef(null);
   const [typingText, setTypingText] = useState('');
   const [typeIndex, setTypeIndex] = useState(0);
   const [dynamicVerdict, setDynamicVerdict] = useState({ market: '-', tech: '-', finance: '-' });
+  const [marketIntel, setMarketIntel] = useState({ saturation_pct: 62, trend_score: 8.4, competitors: [], insights: '', tam_low: null, tam_high: null });
+  const [isVoiceActive, setIsVoiceActive] = useState(false);
+  const recognitionRef = useRef(null);
+  const [readyForNextAgent, setReadyForNextAgent] = useState(true);
 
   const buildAgentStateMap = (state, ind) => ({
     tech: { state, ind },
@@ -130,7 +134,9 @@ const discussionRef = useRef(null);
     setShownMessagesCount(0)
     setTypingText('')
     setTypeIndex(0)
+    setReadyForNextAgent(true)
     setAgentStates(buildAgentStateMap('Review complete', 'status-idle'))
+
 
     if (aggregateConfidence) {
       setVerdict({
@@ -160,12 +166,14 @@ const discussionRef = useRef(null);
     setShownMessagesCount(0)
     setTypingText('')
     setTypeIndex(0)
+    setReadyForNextAgent(true)
     setSessionTasks([])
     setShowConsensus(false)
     setDiscussionPhase('Idle')
     setVerdict({ market: '-', tech: '-', finance: '-' })
     setAgentStates(buildAgentStateMap('Waiting for idea', 'status-idle'))
   }
+
 
   const loadSessionDetails = async (id, view = 'boardroom') => {
     const response = await apiFetch(`/api/sessions/${id}`)
@@ -365,14 +373,16 @@ const discussionRef = useRef(null);
       }
 
       // Analysis complete - show results
-      setSessionId(data.session.id)
+    setSessionId(data.session.id)
       applySessionData(data)
       setGlobalTasks(data.tasks || [])
     setDiscussionPhase('Complete')
       setShownMessagesCount(0)
       setTypingText('')
       setTypeIndex(0)
+      setReadyForNextAgent(true)
       setAgentStates(buildAgentStateMap('Analysis complete', 'status-idle'))
+
     } catch (error) {
       console.error('Analysis Error:', error)
       setDiscussionPhase('Idle')
@@ -405,32 +415,29 @@ const discussionRef = useRef(null);
       return;
     }
 
-    if (shownMessagesCount < messages.length) {
-      const delay = shownMessagesCount === 0 ? 800 : 1800; // Pause between agents
-      const timer = setTimeout(() => {
-        const nextIdx = shownMessagesCount;
-        const nextMsg = messages[nextIdx];
-        const agentKey = nextMsg.agent;
+if (readyForNextAgent && shownMessagesCount < messages.length) {
+      const nextIdx = shownMessagesCount;
+      const nextMsg = messages[nextIdx];
+      const agentKey = nextMsg.agent;
 
-        // Set agent speaking
-        setAgentStates((prev) => ({
-          ...prev,
-          [agentKey]: { state: `${nextMsg.name} speaking`, ind: 'status-speaking' }
-        }));
+      // Set agent speaking
+      setAgentStates((prev) => ({
+        ...prev,
+        [agentKey]: { state: `${nextMsg.name} speaking`, ind: 'status-speaking' }
+      }));
 
-        // Start typing this message
-        setTypingText(nextMsg.text);
-        setTypeIndex(0);
-        speakMessage(nextMsg.text, agentKey);
-        setShownMessagesCount(shownMessagesCount + 1);
-      }, delay);
+      // Start typing this message
+      setTypingText(nextMsg.text);
+      setTypeIndex(0);
+      setReadyForNextAgent(false);
+      setShownMessagesCount(shownMessagesCount + 1);
+      speakMessage(nextMsg.text, agentKey);
 
-      return () => clearTimeout(timer);
     } else if (shownMessagesCount >= messages.length) {
       // All complete, idle states
       setAgentStates((prev) => buildAgentStateMap('Review complete', 'status-idle'));
     }
-  }, [shownMessagesCount, messages.length]);
+  }, [readyForNextAgent, shownMessagesCount, messages.length]);
 
   // Speech synthesis setup
   useEffect(() => {
@@ -461,9 +468,12 @@ const discussionRef = useRef(null);
         volume: 0.8
       });
       synthRef.current.cancel();
+      utterance.onend = () => setReadyForNextAgent(true);
+      utterance.onerror = () => setReadyForNextAgent(true);
       synthRef.current.speak(utterance);
     }
   };
+
 
   const computeDynamicVerdict = useCallback(() => {
     if (messages.length === 0) return;
@@ -510,8 +520,10 @@ const discussionRef = useRef(null);
   useEffect(() => {
     if (shownMessagesCount === messages.length && messages.length > 0) {
       computeDynamicVerdict();
+      const delay = setTimeout(() => fetchMarketIntel(), 1000);
+      return () => clearTimeout(delay);
     }
-  }, [shownMessagesCount, messages.length, computeDynamicVerdict]);
+  }, [shownMessagesCount, messages.length, computeDynamicVerdict, sessionId]);
 
   // Typing animation effect
   useEffect(() => {
@@ -524,12 +536,22 @@ const discussionRef = useRef(null);
           }
           return prev + 1;
         });
-      }, 40);
+      }, 25);
+
     }
     return () => {
       if (interval) clearInterval(interval);
     };
   }, [typingText, typeIndex]);
+
+  // Fallback: if typing complete and speech not triggering next, enable next after 1s
+  useEffect(() => {
+    if (typingText && typeIndex >= typingText.length && !readyForNextAgent) {
+      const timer = setTimeout(() => setReadyForNextAgent(true), 1200);
+      return () => clearTimeout(timer);
+    }
+  }, [typeIndex, typingText, readyForNextAgent]);
+
 
   // Fetch Vault Data
   useEffect(() => {
@@ -623,6 +645,53 @@ const discussionRef = useRef(null);
   }
 
   const handleKeyDown = (e) => { if (e.key === 'Enter') startSession() }
+
+  const toggleVoiceInput = () => {
+    if (isVoiceActive) {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+      setIsVoiceActive(false);
+    } else {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        const recognition = new SpeechRecognition();
+        recognition.lang = 'en-US';
+        recognition.continuous = false;
+        recognition.interimResults = false;
+
+        recognition.onresult = (event) => {
+          const transcript = event.results[0][0].transcript;
+          setIdeaInput((prev) => prev + transcript + ' ');
+          if (transcript.toLowerCase().includes('stop')) {
+            synthRef.current?.cancel();
+            setReadyForNextAgent(true);
+            setTypeIndex(typingText.length);
+          }
+        };
+
+        recognition.onerror = () => setIsVoiceActive(false);
+        recognition.onend = () => setIsVoiceActive(false);
+
+        recognitionRef.current = recognition;
+        recognition.start();
+        setIsVoiceActive(true);
+      }
+    }
+  };
+
+  const fetchMarketIntel = async () => {
+    if (!sessionId) return;
+    try {
+      const response = await analyzeSessionMarketIntel(sessionId);
+      const data = await response.json();
+      if (response.ok && data.marketIntel) {
+        setMarketIntel(data.marketIntel);
+      }
+    } catch (error) {
+      console.error('Market Intel fetch error:', error);
+    }
+  };
   const switchView = (v) => setCurrentView(v)
   const handleLogout = () => {
     logout()
@@ -804,6 +873,14 @@ const discussionRef = useRef(null);
                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
                       </button>
                       <input className="boardroom-input" placeholder={messages.length === 0 ? "Describe your startup idea..." : "Reply to the team..."} value={ideaInput} onChange={(e) => setIdeaInput(e.target.value)} onKeyDown={handleKeyDown} />
+                      <button className={`attach-btn voice-btn ${isVoiceActive ? 'active' : ''}`} onClick={toggleVoiceInput} title="Voice Input">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M12 1a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                          <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                          <line x1="12" y1="19" x2="12" y2="23"></line>
+                          <line x1="8" y1="23" x2="16" y2="23"></line>
+                        </svg>
+                      </button>
                       <button className="send-btn" onClick={startSession}>→</button>
                     </div>
                     <div className="input-footer">
@@ -893,17 +970,27 @@ const discussionRef = useRef(null);
                   <div className="dash-card-header" style={{ padding: '14px 20px', fontSize: '14px' }}>Market Intelligence</div>
                   <div className="panel-body">
                     <div className="insight-metric">
-                      <div className="insight-label"><span>Trend Receptivity</span> <span style={{ color: '#4ade80' }}>High (84%)</span></div>
-                      <div className="insight-bar-wrap"><div className="insight-bar" style={{ width: '84%', background: 'linear-gradient(90deg, #22c55e, #4ade80)' }}></div></div>
+                      <div className="insight-label"><span>TAM Range</span> <span>${marketIntel.tam_low ? `$${marketIntel.tam_low/1e6}M - $${marketIntel.tam_high/1e6}M` : '—'}</span></div>
                     </div>
                     <div className="insight-metric">
-                      <div className="insight-label"><span>Competitive Saturation</span> <span style={{ color: '#fbbf24' }}>Medium (62%)</span></div>
-                      <div className="insight-bar-wrap"><div className="insight-bar" style={{ width: '62%', background: 'linear-gradient(90deg, #d97706, #fbbf24)' }}></div></div>
+                      <div className="insight-label"><span>Trend Score</span> <span style={{ color: marketIntel.trend_score ? '#4ade80' : 'var(--text-muted)' }}>{marketIntel.trend_score ? marketIntel.trend_score.toFixed(1) : '—'}</span></div>
+                      <div className="insight-bar-wrap"><div className="insight-bar" style={{ width: marketIntel.trend_score ? `${marketIntel.trend_score * 10}%` : '0%', background: 'linear-gradient(90deg, #22c55e, #4ade80)' }}></div></div>
                     </div>
                     <div className="insight-metric">
-                      <div className="insight-label"><span>Regulatory Risk</span> <span style={{ color: '#f87171' }}>Elevated (45%)</span></div>
-                      <div className="insight-bar-wrap"><div className="insight-bar" style={{ width: '45%', background: 'linear-gradient(90deg, #dc2626, #f87171)' }}></div></div>
+                      <div className="insight-label"><span>Saturation</span> <span style={{ color: marketIntel.saturation_pct ? (marketIntel.saturation_pct > 70 ? '#f87171' : marketIntel.saturation_pct > 40 ? '#fbbf24' : '#4ade80') : 'var(--text-muted)' }}>{marketIntel.saturation_pct ? marketIntel.saturation_pct + '%' : '—'}</span></div>
+                      <div className="insight-bar-wrap"><div className="insight-bar" style={{ width: marketIntel.saturation_pct ? `${marketIntel.saturation_pct}%` : '0%', background: 'linear-gradient(90deg, #d97706, #f87171)' }}></div></div>
                     </div>
+                    {marketIntel.competitors?.length > 0 && (
+                      <div className="insight-metric">
+                        <div className="insight-label"><span>Competitors</span></div>
+                        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{marketIntel.competitors.slice(0,3).join(', ')}{marketIntel.competitors.length > 3 ? '...' : ''}</div>
+                      </div>
+                    )}
+                    {marketIntel.insights && (
+                      <div style={{ marginTop: '12px', padding: '12px', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', fontSize: '12px', lineHeight: 1.5 }}>
+                        {marketIntel.insights}
+                      </div>
+                    )}
                   </div>
                 </motion.div>
               </div>

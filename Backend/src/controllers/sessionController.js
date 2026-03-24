@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import Session from '../models/Session.js'
 import SessionMessage from '../models/SessionMessage.js'
 import Task from '../models/Task.js'
-import { analyzeIdeaGroq } from '../utils/sessionAnalysis.js';
+import { analyzeIdeaGroq, analyzeChatContext } from '../utils/sessionAnalysis.js';
 
 const serializeSessionSummary = (session) => ({
   id: session._id,
@@ -115,6 +115,7 @@ export const getSessionById = async (req, res) => {
         market_score: session.marketScore,
         tech_score: session.techScore,
         finance_score: session.financeScore,
+        marketIntel: session.marketIntel,
       },
       history: messages.map(serializeMessage),
       tasks: tasks.map(serializeTask),
@@ -127,7 +128,7 @@ export const getSessionById = async (req, res) => {
 export const getVaultSummary = async (req, res) => {
   try {
     const sessions = await Session.find({ userId: req.user._id })
-      .select('title context verdict agents status activity')
+      .select('title context verdict agents status activity marketIntel')
       .sort({ activity: -1, updatedAt: -1 })
 
     return res.status(200).json(sessions.map(serializeSessionSummary))
@@ -135,4 +136,33 @@ export const getVaultSummary = async (req, res) => {
     return res.status(500).json({ message: 'Server error while loading vault summary' })
   }
 }
+
+export const analyzeSessionChat = async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const session = await Session.findOne({ _id: sessionId, userId: req.user._id });
+
+    if (!session) {
+      return res.status(404).json({ message: 'Session not found' });
+    }
+
+    const messages = await SessionMessage.find({ sessionId: session._id }).sort({ createdAt: 1 });
+
+    const marketIntel = await analyzeChatContext(messages.map(serializeMessage));
+
+    // Update session
+    session.marketIntel = marketIntel;
+    session.activity = new Date();
+    await session.save();
+
+    return res.json({
+      success: true,
+      marketIntel,
+      message: 'Market intelligence updated from chat context.'
+    });
+  } catch (error) {
+    console.error('Chat Analysis Error:', error);
+    return res.status(500).json({ message: 'Failed to analyze chat context', error: error.message });
+  }
+};
 

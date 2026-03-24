@@ -17,5 +17,6 @@ router.get('/vault/summary', getVaultSummary)
 router.get('/sessions', listSessions)
 router.post('/sessions', createSession)
 router.get('/sessions/:id', getSessionById)
+router.post('/sessions/:sessionId/analyze-chat', analyzeSessionChat)
 
 export default router

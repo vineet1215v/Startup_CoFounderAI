@@ -31,6 +31,11 @@ export const apiFetch = (path, options = {}) => {
   })
 }
 
+export const analyzeSessionMarketIntel = (sessionId) => {
+  return apiFetch(`/api/sessions/${sessionId}/analyze-chat`, { method: 'POST' })
+}
+
+
 // Socket.io client for Boardroom live streaming (proxied via Backend:5000) - REMOVED
 // Now using direct HTTP API calls instead of WebSockets
 // export const boardroomSocket = (query = {}) => {
