@@ -72,7 +72,13 @@ const Dashboard = () => {
   const [profileLoading, setProfileLoading] = useState(false)
   const [profileSaving, setProfileSaving] = useState(false)
   const [profileMessage, setProfileMessage] = useState('')
-  const discussionRef = useRef(null);
+const discussionRef = useRef(null);
+  const synthRef = useRef(null);
+  const voicesRef = useRef([]);
+  const [shownMessagesCount, setShownMessagesCount] = useState(0);
+  const [typingText, setTypingText] = useState('');
+  const [typeIndex, setTypeIndex] = useState(0);
+  const [dynamicVerdict, setDynamicVerdict] = useState({ market: '-', tech: '-', finance: '-' });
 
   const buildAgentStateMap = (state, ind) => ({
     tech: { state, ind },
@@ -121,6 +127,9 @@ const Dashboard = () => {
     setCurrentIdea(payload.session?.idea_text || payload.session?.title || 'Enter your startup idea below to begin')
     setMessages((payload.history || []).map(formatHistoryItem))
     setSessionTasks(payload.tasks || [])
+    setShownMessagesCount(0)
+    setTypingText('')
+    setTypeIndex(0)
     setAgentStates(buildAgentStateMap('Review complete', 'status-idle'))
 
     if (aggregateConfidence) {
@@ -148,6 +157,9 @@ const Dashboard = () => {
     setCurrentIdea('Enter your startup idea below to begin')
     setIdeaInput('')
     setMessages([])
+    setShownMessagesCount(0)
+    setTypingText('')
+    setTypeIndex(0)
     setSessionTasks([])
     setShowConsensus(false)
     setDiscussionPhase('Idle')
@@ -356,7 +368,10 @@ const Dashboard = () => {
       setSessionId(data.session.id)
       applySessionData(data)
       setGlobalTasks(data.tasks || [])
-      setDiscussionPhase('Complete')
+    setDiscussionPhase('Complete')
+      setShownMessagesCount(0)
+      setTypingText('')
+      setTypeIndex(0)
       setAgentStates(buildAgentStateMap('Analysis complete', 'status-idle'))
     } catch (error) {
       console.error('Analysis Error:', error)
@@ -379,7 +394,142 @@ const Dashboard = () => {
     if (discussionRef.current) {
       discussionRef.current.scrollTop = discussionRef.current.scrollHeight
     }
-  }, [messages])
+  }, [messages, shownMessagesCount, typeIndex])
+
+  // Sequential message reveal
+  useEffect(() => {
+    if (messages.length === 0) {
+      setShownMessagesCount(0);
+      setTypingText('');
+      setTypeIndex(0);
+      return;
+    }
+
+    if (shownMessagesCount < messages.length) {
+      const delay = shownMessagesCount === 0 ? 800 : 1800; // Pause between agents
+      const timer = setTimeout(() => {
+        const nextIdx = shownMessagesCount;
+        const nextMsg = messages[nextIdx];
+        const agentKey = nextMsg.agent;
+
+        // Set agent speaking
+        setAgentStates((prev) => ({
+          ...prev,
+          [agentKey]: { state: `${nextMsg.name} speaking`, ind: 'status-speaking' }
+        }));
+
+        // Start typing this message
+        setTypingText(nextMsg.text);
+        setTypeIndex(0);
+        speakMessage(nextMsg.text, agentKey);
+        setShownMessagesCount(shownMessagesCount + 1);
+      }, delay);
+
+      return () => clearTimeout(timer);
+    } else if (shownMessagesCount >= messages.length) {
+      // All complete, idle states
+      setAgentStates((prev) => buildAgentStateMap('Review complete', 'status-idle'));
+    }
+  }, [shownMessagesCount, messages.length]);
+
+  // Speech synthesis setup
+  useEffect(() => {
+    synthRef.current = window.speechSynthesis;
+    const loadVoices = () => {
+      voicesRef.current = speechSynthesis.getVoices();
+    };
+    loadVoices();
+    speechSynthesis.onvoiceschanged = loadVoices;
+  }, []);
+
+  const speakMessage = (text, agentKey) => {
+    if (synthRef.current && text && voicesRef.current.length > 0) {
+      const utterance = new SpeechSynthesisUtterance(text);
+      const voiceConfig = {
+        tech: { rate: 0.95, pitch: 1.05 },
+        mkt: { rate: 1.0, pitch: 1.0 },
+        fin: { rate: 0.85, pitch: 0.95 },
+        prod: { rate: 1.05, pitch: 1.1 },
+        ops: { rate: 0.9, pitch: 1.0 },
+        ceo: { rate: 0.9, pitch: 0.85 },
+        founder: { rate: 1.0, pitch: 1.0 }
+      }[agentKey] || { rate: 1.0, pitch: 1.0 };
+      Object.assign(utterance, {
+        rate: voiceConfig.rate,
+        pitch: voiceConfig.pitch,
+        voice: voicesRef.current.find(v => v.lang?.startsWith('en')) || voicesRef.current[0],
+        volume: 0.8
+      });
+      synthRef.current.cancel();
+      synthRef.current.speak(utterance);
+    }
+  };
+
+  const computeDynamicVerdict = useCallback(() => {
+    if (messages.length === 0) return;
+
+    const posWords = ['viable', 'strong', 'promising', 'excellent', 'go', 'high', 'good', 'positive', 'opportunity', 'bullish'];
+    const negWords = ['risky', 'weak', 'challenging', 'no', 'low', 'bad', 'poor', 'impossible', 'bearish', 'stagnant'];
+
+    const categoryScores = { market: [], tech: [], finance: [] };
+
+    messages.forEach((m) => {
+      const lowerText = m.text.toLowerCase();
+      const posCount = posWords.filter((w) => lowerText.includes(w)).length;
+      const negCount = negWords.filter((w) => lowerText.includes(w)).length;
+      const score = Math.max(0, Math.min(10, ((posCount - negCount) * 1.5) + 5));
+
+      const agentLower = m.agent || m.role?.toLowerCase() || '';
+      if (['mkt', 'market'].some(k => agentLower.includes(k))) categoryScores.market.push(score);
+      if (['tech', 'technical', 'cto'].some(k => agentLower.includes(k))) categoryScores.tech.push(score);
+      if (['fin', 'finance', 'cfo'].some(k => agentLower.includes(k))) categoryScores.finance.push(score);
+      if (['prod', 'product'].some(k => agentLower.includes(k))) {
+        categoryScores.tech.push(score * 0.7);
+        categoryScores.market.push(score * 0.3);
+      }
+    });
+
+    const avg = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 5).toFixed(1);
+
+    const newVerdict = {
+      market: avg(categoryScores.market),
+      tech: avg(categoryScores.tech),
+      finance: avg(categoryScores.finance),
+    };
+
+    setDynamicVerdict(newVerdict);
+
+    const overall = (parseFloat(newVerdict.market) + parseFloat(newVerdict.tech) + parseFloat(newVerdict.finance)) / 3;
+    if (overall > 7) {
+      setShowConsensus(true);
+      setDiscussionPhase('Consensus Reached');
+    }
+  }, [messages]);
+
+  // Dynamic verdict computation on chat complete
+  useEffect(() => {
+    if (shownMessagesCount === messages.length && messages.length > 0) {
+      computeDynamicVerdict();
+    }
+  }, [shownMessagesCount, messages.length, computeDynamicVerdict]);
+
+  // Typing animation effect
+  useEffect(() => {
+    let interval;
+    if (typingText && typeIndex < typingText.length) {
+      interval = setInterval(() => {
+        setTypeIndex((prev) => {
+          if (prev >= typingText.length) {
+            return typingText.length;
+          }
+          return prev + 1;
+        });
+      }, 40);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [typingText, typeIndex]);
 
   // Fetch Vault Data
   useEffect(() => {
@@ -608,26 +758,37 @@ const Dashboard = () => {
                         <span style={{ color: 'rgba(255,255,255,0.65)' }}>Type your startup idea below and press Enter.</span>
                       </div>
                     ) : (
-                      messages.map((m, i) => (
-                        <div className="chat-msg" key={i}>
-                          <div className="chat-av" style={{ background: m.bg }}>{m.av}</div>
-                          <div className="chat-body">
-                            <div className="chat-meta">
-                              <span className="chat-name">{m.name}</span>
-                              <span className="chat-role">{m.role}</span>
-                              <span className="chat-time">Now</span>
-                            </div>
-                            <div className={`chat-bubble ${m.tone}`}>
-                              {m.text}
-                              <div className="chat-actions">
-                                <button className="chat-action-btn" title="Agree" onClick={() => setIdeaInput(`I agree with ${m.name}. Turn that into a concrete next step.`)}>👍</button>
-                                <button className="chat-action-btn" title="Elaborate" onClick={() => setIdeaInput(`Elaborate on ${m.name}'s point and make it more specific.`)}>🔍 Elaborate</button>
-                                <button className="chat-action-btn" title="Counter argument" onClick={() => setIdeaInput(`Give me the strongest counter-argument to ${m.name}'s point.`)}>⚡ Counter</button>
+                      (() => {
+                        const shownMsgs = messages.slice(0, shownMessagesCount);
+                        return shownMsgs.map((m, i) => {
+                          const isCurrentTyping = i === shownMessagesCount - 1 && typeIndex <= typingText.length;
+                          const displayText = isCurrentTyping 
+                            ? typingText.substring(0, typeIndex) + (typeIndex < typingText.length ? '|' : '')
+                            : m.text;
+                          return (
+                            <div className="chat-msg" key={i}>
+                              <div className="chat-av" style={{ background: m.bg }}>{m.av}</div>
+                              <div className="chat-body">
+                                <div className="chat-meta">
+                                  <span className="chat-name">{m.name}</span>
+                                  <span className="chat-role">{m.role}</span>
+                                  <span className="chat-time">Now</span>
+                                </div>
+                                <div className={`chat-bubble ${m.tone} ${isCurrentTyping ? 'typing' : ''}`}>
+                                  {displayText}
+                                  {!isCurrentTyping && (
+                                    <div className="chat-actions">
+                                      <button className="chat-action-btn" title="Agree" onClick={() => setIdeaInput(`I agree with ${m.name}. Turn that into a concrete next step.`)}>👍</button>
+                                      <button className="chat-action-btn" title="Elaborate" onClick={() => setIdeaInput(`Elaborate on ${m.name}'s point and make it more specific.`)}>🔍 Elaborate</button>
+                                      <button className="chat-action-btn" title="Counter argument" onClick={() => setIdeaInput(`Give me the strongest counter-argument to ${m.name}'s point.`)}>⚡ Counter</button>
+                                    </div>
+                                  )}
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        </div>
-                      ))
+                          );
+                        });
+                      })()
                     )}
                   </div>
                   <div className="input-wrap">
@@ -714,9 +875,9 @@ const Dashboard = () => {
                   <div className="dash-card-header" style={{ padding: '14px 20px', fontSize: '14px' }}>Verdict</div>
                   <div className="panel-body">
                     <div className="verdict-mini">
-                       <div className="verdict-mini-card"><div className="verdict-label">Market</div><div className="verdict-val" style={{ color: verdict.market !== '—' ? '#4ade80' : 'var(--text-muted)' }}>{verdict.market}</div></div>
-                       <div className="verdict-mini-card"><div className="verdict-label">Tech</div><div className="verdict-val" style={{ color: verdict.tech !== '—' ? '#60a5fa' : 'var(--text-muted)' }}>{verdict.tech}</div></div>
-                       <div className="verdict-mini-card"><div className="verdict-label">Finance</div><div className="verdict-val" style={{ color: verdict.finance !== '—' ? '#fbbf24' : 'var(--text-muted)' }}>{verdict.finance}</div></div>
+                       <div className="verdict-mini-card"><div className="verdict-label">Market</div><div className="verdict-val" style={{ color: dynamicVerdict.market !== '-' ? '#4ade80' : 'var(--text-muted)' }}>{dynamicVerdict.market !== '-' ? dynamicVerdict.market : verdict.market}</div></div>
+                       <div className="verdict-mini-card"><div className="verdict-label">Tech</div><div className="verdict-val" style={{ color: dynamicVerdict.tech !== '-' ? '#60a5fa' : 'var(--text-muted)' }}>{dynamicVerdict.tech !== '-' ? dynamicVerdict.tech : verdict.tech}</div></div>
+                       <div className="verdict-mini-card"><div className="verdict-label">Finance</div><div className="verdict-val" style={{ color: dynamicVerdict.finance !== '-' ? '#fbbf24' : 'var(--text-muted)' }}>{dynamicVerdict.finance !== '-' ? dynamicVerdict.finance : verdict.finance}</div></div>
                     </div>
                     {showConsensus && (
                       <div className="consensus-banner show">
