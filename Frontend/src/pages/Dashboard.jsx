@@ -345,12 +345,21 @@ const discussionRef = useRef(null);
       return
     }
     
-    setCurrentIdea(trimmed)
+    if (!sessionId) {
+      setCurrentIdea(trimmed)
+    } else {
+      setCurrentIdea((prev) => `${prev}\n\nFollow-up: ${trimmed}`);
+    }
     setIdeaInput('')
-    setMessages([])
     setShowConsensus(false)
     setVerdict({ market: '—', tech: '—', finance: '—' })
     setDiscussionPhase('Analyzing')
+
+    // Only reset messages for new session
+    if (!sessionId) {
+      setMessages([])
+      setSessionTasks([])
+    }
 
     setAgentStates(buildAgentStateMap('Analyzing with AI...', 'status-thinking'))
 
@@ -372,16 +381,16 @@ const discussionRef = useRef(null);
         throw new Error(data.message || 'Unable to analyze idea')
       }
 
-      // Analysis complete - show results
-    setSessionId(data.session.id)
-      applySessionData(data)
-      setGlobalTasks(data.tasks || [])
-    setDiscussionPhase('Complete')
-      setShownMessagesCount(0)
-      setTypingText('')
-      setTypeIndex(0)
-      setReadyForNextAgent(true)
-      setAgentStates(buildAgentStateMap('Analysis complete', 'status-idle'))
+      // Append new analysis to existing messages for continuation
+      const newMessages = data.history.map(formatHistoryItem);
+      setMessages((prev) => [...prev, ...newMessages]);
+      setSessionTasks((prev) => [...new Set([...prev, ...data.tasks])]);
+      setSessionId(data.session.id);
+      
+      setGlobalTasks((prev) => [...new Set([...prev, ...data.tasks])]);
+      setDiscussionPhase('Complete');
+      setShownMessagesCount(messages.length); // Continue from current position
+      setAgentStates(buildAgentStateMap('Analysis complete', 'status-idle'));
 
     } catch (error) {
       console.error('Analysis Error:', error)

@@ -22,6 +22,16 @@ const AGENTS = {
   }
 };
 
+function cleanJsonText(text) {
+  return text
+    .replace(/```json\s*|\s*```/g, '')
+    .replace(/```/g, '')
+    .trim()
+    .replace(/\\n/g, ' ')
+    .replace(/[\r\n\t]/g, ' ')
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, ''); // Remove control chars
+}
+
 export const analyzeIdeaGroq = async (ideaText) => {
   try {
     const sessionId = "groq-" + Date.now();
@@ -56,7 +66,7 @@ JSON:`;
       messages: [{ role: "user", content: prompt }],
     });
     
-    const text = completion.choices[0].message.content.trim();
+    let text = cleanJsonText(completion.choices[0].message.content);
 
     let analyses = [];
     let scores = {};
@@ -116,7 +126,7 @@ Generate 3-5 actionable next-step tasks. Return ONLY valid JSON array:
       messages: [{ role: "user", content: taskPrompt }],
     });
     
-    const taskText = taskCompletion.choices[0].message.content.trim();
+    let taskText = cleanJsonText(taskCompletion.choices[0].message.content);
 
     let tasks = [];
     try {
@@ -201,7 +211,7 @@ JSON:`;
       messages: [{ role: "user", content: prompt }],
     });
 
-    const text = completion.choices[0].message.content.trim();
+    let text = cleanJsonText(completion.choices[0].message.content);
     
     let intel;
     try {

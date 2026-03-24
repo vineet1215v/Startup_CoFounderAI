@@ -140,13 +140,24 @@ export const getVaultSummary = async (req, res) => {
 export const analyzeSessionChat = async (req, res) => {
   try {
     const { sessionId } = req.params;
-    const session = await Session.findOne({ _id: sessionId, userId: req.user._id });
+    // Skip Session.findOne - use messages directly by sessionId string
+    // No Mongo lookup needed for analysis
 
-    if (!session) {
-      return res.status(404).json({ message: 'Session not found' });
+    const messages = await SessionMessage.find({ sessionId: sessionId }).sort({ createdAt: 1 });
+
+    if (messages.length === 0) {
+      return res.json({
+        marketIntel: {
+          tam_low: null,
+          tam_high: null,
+          saturation_pct: null,
+          trend_score: null,
+          competitors: [],
+          insights: 'No messages found for this session.',
+          last_updated: new Date()
+        }
+      });
     }
-
-    const messages = await SessionMessage.find({ sessionId: session._id }).sort({ createdAt: 1 });
 
     const marketIntel = await analyzeChatContext(messages.map(serializeMessage));
 
