@@ -9,6 +9,8 @@ import { requireAuth } from '../middleware/auth.js'
 
 const router = express.Router()
 
+router.post('/boardroom/analyze-idea', createSession)
+
 router.use(requireAuth)
 
 router.get('/vault/summary', getVaultSummary)

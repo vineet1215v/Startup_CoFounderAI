@@ -56,7 +56,7 @@ function App() {
                             <Route path="/" element={<Home />} />
                             <Route path="/login" element={<Login />} />
                             <Route path="/register" element={<Register />} />
-                            <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+                            <Route path="/dashboard" element={  <Dashboard />} />
                         </Routes>
                     </Layout>
                 </Router>
@@ -66,3 +66,5 @@ function App() {
 }
 
 export default App
+
+import ErrorBoundary from './components/common/ErrorBoundary.jsx'

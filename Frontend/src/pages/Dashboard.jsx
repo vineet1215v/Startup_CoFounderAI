@@ -1,20 +1,15 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { apiFetch, boardroomFetch, boardroomWsUrl, hasBoardroomService } from '../config/api'
+import { apiFetch } from '../config/api'
+// WebSocket functionality removed - now using direct API calls
+// import { apiFetch, boardroomSocket } from '../config/api'
+// socket.io handled by boardroomSocket() from api.js
+// import socketIoClient from 'socket.io-client' // REMOVED - use boardroomSocket()
 import '../styles/Dashboard.css'
 
-const MSGS = [
-  { agent: 'mkt', av: 'MK', bg: 'linear-gradient(135deg,#d97706,#fbbf24)', name: 'Maya', role: 'Marketing', delay: 700, tone: 'insight', text: "Market timing looks strong here — demand in this category has been growing steadily. That said, I count at least 3 well-funded competitors. We need a razor-sharp positioning angle before spending a dollar on acquisition." },
-  { agent: 'tech', av: 'TC', bg: 'linear-gradient(135deg,#2563eb,#60a5fa)', name: 'Tariq', role: 'Technical Lead', delay: 2300, tone: '', text: "Technically, this is very buildable with current tooling. A production-ready MVP in 10–12 weeks is realistic with 3 engineers. My flag: scalability architecture past 10k concurrent users needs to be decided upfront, not retrofitted." },
-  { agent: 'fin', av: 'FN', bg: 'linear-gradient(135deg,#7c3aed,#a78bfa)', name: 'Felix', role: 'Finance', delay: 4000, tone: 'debate', text: "Tariq, I need to pressure-test that timeline. 3 senior engineers for 12 weeks is $90–120k burn before a single dollar in. What's the pre-seed assumption? Because the unit economics only work if we raise $600k+ and hit 500 paying users by month 9." },
-  { agent: 'prod', av: 'PD', bg: 'linear-gradient(135deg,#059669,#34d399)', name: 'Priya', role: 'Product', delay: 5600, tone: 'agree', text: "Felix is right to push back on scope. I'd argue for a stripped V1 — just the core loop, nothing more. That forces us to validate the real value prop before over-engineering. I'd rather talk to 50 real users than build for hypothetical ones." },
-  { agent: 'tech', av: 'TC', bg: 'linear-gradient(135deg,#2563eb,#60a5fa)', name: 'Tariq', role: 'Technical Lead', delay: 7100, tone: 'debate', text: "Priya, agreed in principle — but there's a difference between lean and fragile. If we cut architectural corners now, we'll spend 3x rebuilding in month 7. I'd propose: minimal features, but no shortcuts on the infrastructure skeleton." },
-  { agent: 'ops', av: 'OM', bg: 'linear-gradient(135deg,#dc2626,#f87171)', name: 'Omar', role: 'Operations', delay: 8600, tone: '', text: "While you all debate build scope — has anyone mapped operational dependencies? Payment processor, legal/compliance, customer support infrastructure. These quietly eat 15–20% of runway if not planned early. We need a dependency matrix before the deck goes out." },
-  { agent: 'mkt', av: 'MK', bg: 'linear-gradient(135deg,#d97706,#fbbf24)', name: 'Maya', role: 'Marketing', delay: 10100, tone: 'insight', text: "Omar's point is critical. Decks die in due diligence because ops wasn't mapped. On GTM — we also need a channel thesis, not just a strategy. PLG or top-down sales? That decision determines who we hire first." },
-  { agent: 'fin', av: 'FN', bg: 'linear-gradient(135deg,#7c3aed,#a78bfa)', name: 'Felix', role: 'Finance', delay: 11600, tone: 'agree', text: "Updated numbers with phased build + 18-month runway target: raise $650k pre-seed, 3-person founding team, 500 paying users by month 9. Unit economics clear at that point. It's tight but achievable if we execute on positioning." },
-]
+// REMOVED: Static demo messages - now live streaming from Python agents
 
 const INITIAL_AGENT_STATE = {
   tech: { state: 'Waiting for idea', ind: 'status-idle' },
@@ -39,8 +34,9 @@ const Dashboard = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true)
   const [discussionPhase, setDiscussionPhase] = useState('Idle')
   const [sessionId, setSessionId] = useState(null)
-  const discussionRef = useRef(null)
-  const socketRef = useRef(null)
+  // WebSocket state removed - now using direct API calls
+  // const [socket, setSocket] = useState(null)
+  // const socketRef = useRef(null)
 
   const [agentStates, setAgentStates] = useState({
     tech: { state: 'Waiting for idea', ind: 'status-idle' },
@@ -76,6 +72,7 @@ const Dashboard = () => {
   const [profileLoading, setProfileLoading] = useState(false)
   const [profileSaving, setProfileSaving] = useState(false)
   const [profileMessage, setProfileMessage] = useState('')
+  const discussionRef = useRef(null);
 
   const buildAgentStateMap = (state, ind) => ({
     tech: { state, ind },
@@ -319,6 +316,8 @@ const Dashboard = () => {
     setGlobalTasks(data)
   }
 
+  // WebSocket connection removed - now using direct API calls
+
   const startSession = async () => {
     const trimmed = ideaInput.trim()
     if (!trimmed) {
@@ -333,13 +332,15 @@ const Dashboard = () => {
     setVerdict({ market: '—', tech: '—', finance: '—' })
     setDiscussionPhase('Analyzing')
 
-    // Reset agent states to thinking
-    setAgentStates(buildAgentStateMap('Analyzing...', 'status-thinking'))
+    setAgentStates(buildAgentStateMap('Analyzing with AI...', 'status-thinking'))
 
     try {
-      const response = await apiFetch('/api/sessions', {
+      const response = await apiFetch('/api/boardroom/analyze-idea', {
         method: 'POST',
-        body: JSON.stringify({ ideaText: trimmed }),
+        body: JSON.stringify({ 
+          ideaText: trimmed,
+          founder_id: founderId
+        }),
       })
       const data = await response.json()
 
@@ -348,28 +349,31 @@ const Dashboard = () => {
           handleUnauthorized()
           return
         }
-
-        throw new Error(data.message || 'Unable to create a session')
+        throw new Error(data.message || 'Unable to analyze idea')
       }
 
+      // Analysis complete - show results
+      setSessionId(data.session.id)
       applySessionData(data)
       setGlobalTasks(data.tasks || [])
+      setDiscussionPhase('Complete')
+      setAgentStates(buildAgentStateMap('Analysis complete', 'status-idle'))
     } catch (error) {
-      console.error('Boardroom Session Error:', error)
+      console.error('Analysis Error:', error)
       setDiscussionPhase('Idle')
-      setAgentStates(buildAgentStateMap('Waiting for idea', 'status-idle'))
-      setMessages([
-        {
-          agent: 'ceo',
-          av: 'CF',
-          name: 'CoFounder Brain',
-          role: 'System',
-          text: error.message || 'Unable to start the boardroom session right now.',
-          type: 'STATUS_UPDATE',
-        },
-      ])
+      setAgentStates(buildAgentStateMap('Analysis failed', 'status-idle'))
     }
   }
+
+  // Live WebSocket connection for real-time agent streaming - REMOVED
+  // useEffect(() => {
+  //   connectBoardroomSocket()
+  //   return () => {
+  //     if (socketRef.current) {
+  //       socketRef.current.disconnect()
+  //     }
+  //   }
+  // }, [connectBoardroomSocket])
 
   useEffect(() => {
     if (discussionRef.current) {

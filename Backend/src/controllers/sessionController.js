@@ -1,12 +1,8 @@
+import mongoose from 'mongoose';
 import Session from '../models/Session.js'
 import SessionMessage from '../models/SessionMessage.js'
 import Task from '../models/Task.js'
-import {
-  analyzeIdea,
-  buildSessionMessages,
-  buildSessionTitle,
-  buildSuggestedTasks,
-} from '../utils/sessionAnalysis.js'
+import { analyzeIdeaGroq } from '../utils/sessionAnalysis.js';
 
 const serializeSessionSummary = (session) => ({
   id: session._id,
@@ -44,65 +40,41 @@ const serializeTask = (task) => ({
 export const createSession = async (req, res) => {
   try {
     const ideaText = (req.body.ideaText || req.body.idea || req.body.payload || '').trim()
+    const founderId = req.user ? new mongoose.Types.ObjectId(req.user._id) : new mongoose.Types.ObjectId();
 
     if (!ideaText) {
       return res.status(400).json({ message: 'Idea text is required' })
     }
 
-    const title = (req.body.title || buildSessionTitle(ideaText)).trim()
-    const analysis = analyzeIdea(ideaText)
+    // Use direct Groq analysis
+    const data = await analyzeIdeaGroq(ideaText)
 
-    const session = await Session.create({
-      userId: req.user._id,
-      title,
-      ideaText,
-      context: analysis.context,
-      status: analysis.status,
-      verdict: analysis.verdict,
-      agents: analysis.agents,
-      marketScore: analysis.marketScore,
-      techScore: analysis.techScore,
-      financeScore: analysis.financeScore,
-      activity: new Date(),
-      consensus: analysis.consensus,
-    })
-
-    const messages = await SessionMessage.insertMany(
-      buildSessionMessages({ title, ideaText, analysis }).map((message) => ({
-        sessionId: session._id,
-        ...message,
-      })),
-    )
-
-    const tasks = await Task.insertMany(
-      buildSuggestedTasks({ title }).map((task) => ({
-        userId: req.user._id,
-        sessionId: session._id,
-        ...task,
-      })),
+    // Sync minimal session metadata to Node MongoDB for UI listings
+    await Session.findOneAndUpdate(
+      { userId: founderId, title: data.session.title },
+      {
+        userId: founderId,
+        title: data.session.title,
+        ideaText: data.session.idea_text,
+        status: data.session.status,
+        agents: data.session.agents,
+        activity: data.session.activity,
+      },
+      { upsert: true, new: true }
     )
 
     return res.status(201).json({
-      message: 'Session created successfully',
-      session: {
-        id: session._id,
-        title: session.title,
-        idea_text: session.ideaText,
-        context: session.context,
-        status: session.status,
-        verdict: session.verdict,
-        agents: session.agents,
-        market_score: session.marketScore,
-        tech_score: session.techScore,
-        finance_score: session.financeScore,
-        activity: session.activity,
-        consensus: session.consensus,
-      },
-      history: messages.map(serializeMessage),
-      tasks: tasks.map(serializeTask),
+      message: 'Live boardroom session activated - agents are analyzing',
+      session: data.session,
+      history: data.history || [],
+      tasks: data.tasks || [],
     })
   } catch (error) {
-    return res.status(500).json({ message: 'Server error while creating session' })
+    console.error('Groq Analysis Error:', error.message);
+    return res.status(500).json({ 
+      message: 'Groq analysis failed. Check GROQ_API_KEY.',
+      error: error.message 
+    });
   }
 }
 
@@ -163,3 +135,4 @@ export const getVaultSummary = async (req, res) => {
     return res.status(500).json({ message: 'Server error while loading vault summary' })
   }
 }
+
