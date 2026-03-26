@@ -3,6 +3,9 @@ import { motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { apiFetch, analyzeSessionMarketIntel } from '../config/api'
+import Documents from './Documents.jsx'
+import OKRs from './OKRs.jsx'
+import Pipeline from './Pipeline.jsx'
 // WebSocket functionality removed - now using direct API calls
 // import { apiFetch, boardroomSocket } from '../config/api'
 // socket.io handled by boardroomSocket() from api.js
@@ -198,22 +201,26 @@ const discussionRef = useRef(null);
   }
 
   const changeTaskStatus = async (taskId, status) => {
-    const response = await apiFetch(`/api/tasks/${taskId}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ status }),
-    })
-    const data = await response.json()
+    try {
+      const response = await apiFetch(`/api/tasks/${taskId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      })
+      const data = await response.json()
 
-    if (!response.ok) {
-      if (response.status === 401) {
-        handleUnauthorized()
-        return
+      if (!response.ok) {
+        console.error('Task update failed:', data.message || response.statusText);
+        if (response.status === 401) {
+          console.warn('Token expired, but not auto-logging out');
+          return;
+        }
+        throw new Error(data.message || 'Unable to update task')
       }
 
-      throw new Error(data.message || 'Unable to update task')
+      updateTaskInState(data.task)
+    } catch (error) {
+      console.error('Task API error:', error);
     }
-
-    updateTaskInState(data.task)
   }
 
   const loadCompanyProfile = async () => {
@@ -262,7 +269,7 @@ const discussionRef = useRef(null);
       }
     } catch (error) {
       console.error('Company Profile Error:', error)
-      setProfileMessage(error.message || 'Unable to load company profile right now.')
+      setProfileMessage('Company profile unavailable - ' + (error.message || 'check connection'))
     } finally {
       setProfileLoading(false)
     }
@@ -303,7 +310,7 @@ const discussionRef = useRef(null);
       setProfileMessage('Company profile saved successfully.')
     } catch (error) {
       console.error('Company Profile Save Error:', error)
-      setProfileMessage(error.message || 'Unable to save company profile right now.')
+      setProfileMessage('Save failed - ' + (error.message || 'try again'))
     } finally {
       setProfileSaving(false)
     }
@@ -647,10 +654,12 @@ if (readyForNextAgent && shownMessagesCount < messages.length) {
     }
   }
 
-  const updateTaskStatus = (taskId, status) => {
-    changeTaskStatus(taskId, status).catch((error) => {
+  const updateTaskStatus = async (taskId, status) => {
+    try {
+      await changeTaskStatus(taskId, status);
+    } catch (error) {
       console.error('Task Update Error:', error)
-    })
+    }
   }
 
   const handleKeyDown = (e) => { if (e.key === 'Enter') startSession() }
@@ -735,10 +744,7 @@ if (readyForNextAgent && shownMessagesCount < messages.length) {
             <span className="sidebar-icon">✅</span>
             <span className="sidebar-item-text">Tasks</span>
           </button>
-          <button className={`sidebar-item ${currentView === 'history' ? 'active' : ''}`} onClick={() => switchView('history')}>
-            <span className="sidebar-icon">◷</span>
-            <span className="sidebar-item-text">Session History</span>
-          </button>
+          
 
           <div className="sidebar-section-label" style={{ marginTop: '12px' }}>My Startup</div>
           <button className={`sidebar-item ${currentView === 'profile' ? 'active' : ''}`} onClick={() => switchView('profile')}>
@@ -908,18 +914,29 @@ if (readyForNextAgent && shownMessagesCount < messages.length) {
                       <button className="control-btn" style={{ padding: '4px 8px', fontSize: '11px' }} onClick={() => switchView('tasks')}>Open Task Board</button>
                     </div>
                     <div className="panel-body" style={{ overflowY: 'auto', padding: '12px 20px' }}>
-                      {sessionTasks.map((task) => (
-                        <div className="action-row" key={task.id}>
-                          <input
-                            type="checkbox"
-                            className="action-check"
-                            checked={task.status === 'completed'}
-                            onChange={() => updateTaskStatus(task.id, task.status === 'completed' ? 'queued' : 'completed')}
-                          />
-                          <div style={{ flex: 1 }}>{task.title}</div>
-                          <div className={`action-tag ${mapRoleToAgentKey(task.owner_role)}`}>{task.owner_role}</div>
-                        </div>
-                      ))}
+                      {sessionTasks.map((task) => {
+                        const newStatus = task.status === 'completed' ? 'queued' : 'completed';
+                        return (
+                          <div className="action-row" key={task.id} style={{ cursor: 'pointer', padding: '8px 0', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                            <input
+                              type="checkbox"
+                              className="action-check"
+                              style={{ cursor: 'pointer', width: '18px', height: '18px', accentColor: '#10b981' }}
+                              checked={task.status === 'completed'}
+                              onChange={async (e) => {
+                                e.stopPropagation();
+                                try {
+                                  await updateTaskStatus(task.id, newStatus);
+                                } catch (error) {
+                                  console.error('Task update failed:', error);
+                                }
+                              }}
+                            />
+                            <div style={{ flex: 1, userSelect: 'none' }}>{task.title}</div>
+                            <div className={`action-tag ${mapRoleToAgentKey(task.owner_role)}`} style={{ fontSize: '12px' }}>{task.owner_role}</div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </motion.div>
                 )}
@@ -960,18 +977,38 @@ if (readyForNextAgent && shownMessagesCount < messages.length) {
                 <motion.div className="dash-card glass" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.3 }}>
                   <div className="dash-card-header" style={{ padding: '14px 20px', fontSize: '14px' }}>Verdict</div>
                   <div className="panel-body">
-                    <div className="verdict-mini">
+<div className="verdict-mini">
                        <div className="verdict-mini-card"><div className="verdict-label">Market</div><div className="verdict-val" style={{ color: dynamicVerdict.market !== '-' ? '#4ade80' : 'var(--text-muted)' }}>{dynamicVerdict.market !== '-' ? dynamicVerdict.market : verdict.market}</div></div>
                        <div className="verdict-mini-card"><div className="verdict-label">Tech</div><div className="verdict-val" style={{ color: dynamicVerdict.tech !== '-' ? '#60a5fa' : 'var(--text-muted)' }}>{dynamicVerdict.tech !== '-' ? dynamicVerdict.tech : verdict.tech}</div></div>
                        <div className="verdict-mini-card"><div className="verdict-label">Finance</div><div className="verdict-val" style={{ color: dynamicVerdict.finance !== '-' ? '#fbbf24' : 'var(--text-muted)' }}>{dynamicVerdict.finance !== '-' ? dynamicVerdict.finance : verdict.finance}</div></div>
                     </div>
-                    {showConsensus && (
-                      <div className="consensus-banner show">
-                        <div className="consensus-title">Consensus reached</div>
-                        <div className="consensus-text">Team consensus: high-potential idea with manageable risk. Recommended raise: $650k pre-seed. Phase the build.</div>
-                        <button className="exec-btn" onClick={() => switchView('tasks')}>Enter Execution Mode →</button>
-                      </div>
-                    )}
+                    <div style={{ marginTop: '16px' }}>
+                      <button 
+                        className="exec-btn" 
+                        onClick={() => {
+                          if (sessionId) {
+                            navigate(`/code/${sessionId}`);
+                          } else {
+                            console.log('No sessionId - start an analysis first');
+                          }
+                        }} 
+                        disabled={!sessionId}
+                        style={{ 
+                          background: sessionId ? 'linear-gradient(135deg, var(--primary), #10b981)' : 'rgba(16, 185, 129, 0.4)',
+                          color: sessionId ? 'white' : 'rgba(255,255,255,0.5)',
+                          width: '100%',
+                          padding: '12px 20px',
+                          borderRadius: '8px',
+                          border: 'none',
+                          fontSize: '14px',
+                          fontWeight: '600',
+                          opacity: sessionId ? 1 : 0.7,
+                          cursor: sessionId ? 'pointer' : 'not-allowed'
+                        }}
+                      >
+                        🚀 Execute Product - Generate MVP Code
+                      </button>
+                    </div>
                   </div>
                 </motion.div>
 
@@ -1384,15 +1421,9 @@ if (readyForNextAgent && shownMessagesCount < messages.length) {
             </motion.div>
           )}
 
-          {['documents', 'okrs', 'pipeline'].includes(currentView) && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="dash-card glass" style={{ padding: '32px', color: 'var(--text-muted)' }}>
-              <div className="dash-card-title" style={{ marginBottom: '12px', color: '#fff' }}>Current Release Focus</div>
-              <p style={{ margin: 0, lineHeight: 1.6 }}>
-                This release is production-focused around idea analysis, session history, task tracking, company profile, and account settings.
-                Documents, OKRs, and the investor pipeline are intentionally left for a later release so the current workflow stays clean and reliable.
-              </p>
-            </motion.div>
-          )}
+{currentView === 'documents' && <Documents />}
+          {currentView === 'okrs' && <OKRs />}
+          {currentView === 'pipeline' && <Pipeline />}
         </div>
       </div>
     </div>
