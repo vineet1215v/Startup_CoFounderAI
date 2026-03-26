@@ -77,33 +77,35 @@ JSON:`;
         {
           agent_name: 'Market Analyst',
           role: 'market',
-          content: parsed.market ? parsed.market.analysis : '',
-          score: parsed.market ? parsed.market.score : 5,
+          content: parsed.market?.analysis || '',
+          score: parsed.market?.score || 5,
           message_type: 'analysis'
         },
         {
           agent_name: 'Tech Architect',
           role: 'tech',
-          content: parsed.tech ? parsed.tech.analysis : '',
-          score: parsed.tech ? parsed.tech.score : 5,
+          content: parsed.tech?.analysis || '',
+          score: parsed.tech?.score || 5,
           message_type: 'analysis'
         },
         {
           agent_name: 'Finance Expert',
           role: 'finance',
-          content: parsed.finance ? parsed.finance.analysis : '',
-          score: parsed.finance ? parsed.finance.score : 5,
+          content: parsed.finance?.analysis || '',
+          score: parsed.finance?.score || 5,
           message_type: 'analysis'
         }
       ];
       scores = {
-        market: parsed.market ? parsed.market.score : 5,
-        tech: parsed.tech ? parsed.tech.score : 5,
-        finance: parsed.finance ? parsed.finance.score : 5
+        market: parsed.market?.score || 5,
+        tech: parsed.tech?.score || 5,
+        finance: parsed.finance?.score || 5
       };
       consensus = [parsed.market, parsed.tech, parsed.finance].map(a => a ? a.analysis : '').filter(Boolean).join('\n\n');
     } catch (e) {
       console.warn('JSON parse failed:', e);
+      console.error('Error details:', e.message);
+      console.error('Response preview (pos 1150-1250):', text.substring(Math.max(0,1150),1250));
       consensus = text;
       analyses = [{
         agent_name: 'AI Assistant', 
@@ -162,6 +164,56 @@ Generate 3-5 actionable next-step tasks. Return ONLY valid JSON array:
   } catch (error) {
     console.error('Groq Analysis Error:', error);
     throw new Error('Groq analysis failed');
+  }
+};
+
+export const generateProductCode = async (messages) => {
+  try {
+    if (!messages || messages.length === 0) {
+      return `<!DOCTYPE html>
+<html>
+<head><title>Empty Project</title></head>
+<body><h1>No chat context - add your idea!</h1></body>
+</html>`;
+    }
+
+    const chatSummary = messages.map(m => `${m.agent_name || m.role}: ${m.content.substring(0, 200)}`).join('\n');
+    const ideaText = chatSummary.substring(0, 1000);
+
+    const prompt = `Generate COMPLETE working HTML/CSS/JS website code based on this chat discussion:
+
+${ideaText}
+
+REQUIREMENTS:
+- SINGLE HTML file (inline CSS/JS)
+- Fully responsive, modern UI
+- Core functionality based on startup idea
+- Professional, production-ready code
+- Comments explaining features
+
+EXAMPLE OUTPUT (Ecommerce):
+<!DOCTYPE html> ... full page
+
+RESPOND WITH CODE ONLY - no explanations.`;
+
+    const completion = await openai.chat.completions.create({
+      model: model,
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    let code = cleanJsonText(completion.choices[0].message.content).trim();
+    
+    // Ensure it's HTML
+    if (!code.startsWith('<!DOCTYPE html>')) {
+      code = `<!DOCTYPE html>
+<html><head><title>AI Generated - ${ideaText.substring(0,50)}</title></head><body><pre>${code}</pre></body></html>`;
+    }
+
+    return code;
+  } catch (error) {
+    console.error('Code Gen Error:', error);
+    return `<!DOCTYPE html>
+<html><head><title>Error</title></head><body><h1>Code generation failed</h1></body></html>`;
   }
 };
 
