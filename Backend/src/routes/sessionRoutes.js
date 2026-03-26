@@ -4,7 +4,8 @@ import {
   getSessionById,
   getVaultSummary,
   listSessions,
-  analyzeSessionChat
+  analyzeSessionChat,
+  generateSessionCode
 } from '../controllers/sessionController.js'
 import { requireAuth } from '../middleware/auth.js'
 
@@ -19,5 +20,6 @@ router.get('/sessions', listSessions)
 router.post('/sessions', createSession)
 router.get('/sessions/:id', getSessionById)
 router.post('/sessions/:sessionId/analyze-chat', analyzeSessionChat);
+router.post('/sessions/:sessionId/generate-code', generateSessionCode);
 
 export default router
