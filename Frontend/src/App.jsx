@@ -7,6 +7,7 @@ import Home from './pages/Home'
 import Login from './pages/auth/Login'
 import Register from './pages/auth/Register'
 import Dashboard from './pages/Dashboard'
+import CodeEditor from './pages/CodeEditor.jsx'
 import { useLocation } from 'react-router-dom'
 import { Navigate } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
@@ -56,7 +57,8 @@ function App() {
                             <Route path="/" element={<Home />} />
                             <Route path="/login" element={<Login />} />
                             <Route path="/register" element={<Register />} />
-                            <Route path="/dashboard" element={  <Dashboard />} />
+                            <Route path="/dashboard" element={<Dashboard />} />
+                            <Route path="/code/:sessionId" element={<CodeEditor />} />
                         </Routes>
                     </Layout>
                 </Router>
