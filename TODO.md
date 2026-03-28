@@ -15,6 +15,6 @@
 - Pipeline: Kanban investor CRM
 
 Dashboard.jsx updated with imports/rendering. Test: npm run dev
-     
+       
 
 
