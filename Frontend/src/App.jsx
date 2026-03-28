@@ -12,7 +12,7 @@ import { useLocation } from 'react-router-dom'
 import { Navigate } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
 
-// Import all page styles
+
 import './pages/Pages.css'
 
 const Layout = ({ children }) => {
